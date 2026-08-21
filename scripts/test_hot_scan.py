@@ -43,6 +43,7 @@ with tempfile.TemporaryDirectory() as tmp:
         [
             (1, "sessions/Fresh session.md", "Fresh", "session", "", fresh, "", 0, "a"),
             (2, "sessions/Old session.md", "Old", "session", "", old, "", 0, "b"),
+            (3, "sessions/Other project.md", "Other", "session", "ACME Corp", fresh, "", 0, "c"),
         ],
     )
     con.executemany(
@@ -51,33 +52,43 @@ with tempfile.TemporaryDirectory() as tmp:
             (1, 1, "Next steps / PENDING", "- [ ] ship fix\n- [x] done\n- [ ] write docs\n- [ ] " + "long tail " * 30, 0),
             (2, 1, "Notes", "- [ ] must stay hidden", 1),
             (3, 2, "Pending", "- [ ] too old", 0),
+            (4, 3, "Pending", "- [ ] belongs to another project", 0),
         ],
     )
     con.commit()
     con.close()
 
-    payload, raw = invoke(db, "--window", "7")
+    payload, raw = invoke(db, "--window", "7", "--project", "")
     assert payload["tails"] == [
         "[ ] ship fix (Session — Fresh session)",
         "[ ] write docs (Session — Fresh session)",
-        "[ ] " + "long tail " * 30 + "(Session — Fresh session)",
+        ("[ ] " + "long tail " * 30).strip()[:199] + "… (Session — Fresh session)",
+        "[ ] belongs to another project (Session — Other project)",
     ]
     assert "last 7 days" in payload["note"]
     assert b"too old" not in raw and b"must stay hidden" not in raw and b"done" not in raw
 
-    one_tail_size = len(HOT_SCAN["encoded"]({"tails": [payload["tails"][0], "> _truncated: 2 more open threads (see handoff index)"], "note": payload["note"]}))
-    truncated, truncated_raw = invoke(db, "--window", "7", "--budget", str(one_tail_size + 1))
+    one_tail_size = len(HOT_SCAN["encoded"]({"tails": [payload["tails"][0], "> _truncated: 3 more open threads"], "note": payload["note"]}))
+    truncated, truncated_raw = invoke(db, "--window", "7", "--project", "", "--budget", str(one_tail_size + 1))
     assert truncated["tails"][0] == payload["tails"][0]
-    assert truncated["tails"][-1] == "> _truncated: 2 more open threads (see handoff index)"
+    assert truncated["tails"][-1] == "> _truncated: 3 more open threads"
     assert len(truncated_raw) <= one_tail_size + 1
 
-    missing, _ = invoke(root / "missing.db")
+    # The digest is per project: threads from other projects must not leak into a session.
+    scoped, scoped_raw = invoke(db, "--window", "7", "--project", "bts")
+    assert scoped["tails"] == ["[ ] belongs to another project (Session — Other project)"], scoped
+    assert b"ship fix" not in scoped_raw
+    assert "open threads in bts" in scoped["note"]
+    assert HOT_SCAN["same_project"]("ACME Corp", "bts") and not HOT_SCAN["same_project"]("widgets", "bts")
+
+    missing, _ = invoke(root / "missing.db", "--project", "")
     assert missing == {"tails": [], "note": ""}
 
-    hook, _ = invoke(db, "--hook")
+    hook, _ = invoke(db, "--hook", "--project", "")
     context = hook["hookSpecificOutput"]["additionalContext"]
     assert hook["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert context.startswith("dont-forget: open threads")
+    assert "not instructions" in context
     assert "- [ ] ship fix (Session — Fresh session)" in context
 
 print("ok")
