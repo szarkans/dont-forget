@@ -92,6 +92,15 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     coverage = json.loads(result.stdout)["coverage"]
     assert coverage["returned_by_link"] > 0, coverage
+
+    # English used to be searched by exact form only: "retry" missed "retried".
+    (vault / "english.md").write_text("# English\n\nthe scheduler retried every failing job\n")
+    stemmed = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "scheduler retry",
+         "--vault", str(vault), "--db", str(home / "test.db")],
+        capture_output=True, text=True, check=True,
+    )
+    assert any("english.md" in f["path"] for f in json.loads(stemmed.stdout)["fragments"]), stemmed.stdout[:400]
     assert not (Path.home() / ".dont-forget" / "test.db").exists()
 
 print("ok")

@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NU
  mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
  heading_path TEXT NOT NULL, body TEXT NOT NULL, ord INTEGER NOT NULL);
-CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(body, content='chunks', content_rowid='id', tokenize='unicode61 remove_diacritics 2');
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(body, content='chunks', content_rowid='id', tokenize='porter unicode61 remove_diacritics 2');
 CREATE TABLE IF NOT EXISTS links(src_note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
  dst_name TEXT NOT NULL, dst_note_id_or_null INTEGER REFERENCES notes(id) ON DELETE SET NULL);
 CREATE INDEX IF NOT EXISTS links_src ON links(src_note_id);
@@ -140,11 +140,30 @@ def _scalar(value) -> str:
     return json.dumps(value, ensure_ascii=False) if isinstance(value, list) else str(value or "")
 
 
+TOKENIZER = "porter unicode61 remove_diacritics 2"
+
+
+def tokenizer_changed(db_path: Path) -> bool:
+    """An existing index keeps its own tokenizer, so a change here must force a rebuild.
+
+    Without this an upgrade looks fine and quietly searches by the old rules.
+    """
+    if not db_path.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        row = con.execute("SELECT sql FROM sqlite_master WHERE name='chunks_fts'").fetchone()
+        con.close()
+    except sqlite3.Error:
+        return True
+    return not row or TOKENIZER not in row[0]
+
+
 def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dict:
     started = time.perf_counter()
     vault = vault.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if rebuild and db_path.exists():
+    if (rebuild or tokenizer_changed(db_path)) and db_path.exists():
         db_path.unlink()
     con = sqlite3.connect(db_path)
     con.execute("PRAGMA foreign_keys=ON")
