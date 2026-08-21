@@ -20,8 +20,19 @@ CYRILLIC = re.compile(r"^[Ѐ-ӿ]+$")
 # How many top-bm25 chunks are re-ranked. The pool is reported, so a query that
 # fills it is visibly a query whose full result set was never examined.
 POOL = 500
-# A word sitting in more than this share of the vault is not a search term.
-COMMON_ABOVE = 0.5
+# A word sitting in more than this share of the vault carries no information about which
+# chunk is meant, so it is not allowed to move the ranking. This is what replaces a list
+# of stopwords: the vault is its own corpus, and no list has to be written per language.
+COMMON_ABOVE = 0.05
+# ...but a share of a tiny vault is noise: in a vault of forty chunks, five percent is
+# two, and every real word looks common. A word has to actually be spread around before
+# its share means anything.
+COMMON_FLOOR = 20
+# How much wider a shorter prefix must be before it is worth taking. A stem is where a
+# prefix stops being productive: past it, cutting one more letter buys almost nothing.
+PREFIX_GROWTH = 1.5
+# Never cut a prefix below this: shorter than this it stops being a word.
+MIN_STEM = 3
 
 
 def parse_terms(query: str) -> list[str]:
@@ -41,6 +52,44 @@ def parse_terms(query: str) -> list[str]:
 
 def fts_query(query: str) -> str:
     return " OR ".join(parse_terms(query))
+
+
+def _hits(con: sqlite3.Connection, term: str) -> int:
+    return con.execute("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?", (term,)).fetchone()[0]
+
+
+def widen(con: sqlite3.Connection, terms: list[str]) -> list[str]:
+    """Cut each prefix term back to the stem the vault itself shows, not one from a list.
+
+    A word typed in one grammatical form does not prefix-match the same word written in
+    another: "текстурам"* held 1 chunk of 3132 while the notes said "текстуры", so the
+    subject of the question was invisible to ranking. Shortening the prefix while it
+    keeps buying a lot of new chunks lands on the stem, because that is exactly where a
+    prefix stops being productive. It needs no stemmer and knows no language: the index
+    is the dictionary. A word already sitting on plenty of chunks is left alone, so a
+    rare precise term is never diluted.
+    """
+    widened: list[str] = []
+    for term in terms:
+        if term.endswith('*'):
+            word = term[1:-2]
+            count = _hits(con, term)
+            # A word the vault does not have at all may be a form of a word it does, so
+            # it keeps shrinking — but it may equally be a typo, and there is no way to
+            # tell. Half the word is as far as that guess is allowed to go: without the
+            # cap, "ресруспаке" became "рес"* and the recall answered with "рестарт".
+            absent_floor = max(MIN_STEM, (len(word) + 1) // 2)
+            for cut in range(len(word) - 1, MIN_STEM - 1, -1):
+                if not count and cut < absent_floor:
+                    break
+                wider = _hits(con, f'"{word[:cut]}"*')
+                if count and (wider + 1) / (count + 1) < PREFIX_GROWTH:
+                    break
+                word, count = word[:cut], wider
+            term = f'"{word}"*'
+        if term not in widened:
+            widened.append(term)
+    return widened
 
 
 def term_weights(con: sqlite3.Connection, terms: list[str]) -> tuple[dict[str, set[int]], dict[str, float]]:
@@ -123,6 +172,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
                 "dropped_by_budget": 0, "weak_match": False, "skipped_hubs": []}}
     con = connect_ro(db_path)
     con.row_factory = sqlite3.Row
+    terms = widen(con, terms)
     hits, weights = term_weights(con, terms)
 
     # Rank by how much of the query a chunk actually covers, not by bm25 alone: bm25
@@ -132,13 +182,19 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     matched_terms: Counter[int] = Counter()
     matched_content: Counter[int] = Counter()
     total_chunks = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
-    content = [term for term in terms if len(hits[term]) < total_chunks * COMMON_ABOVE] or terms
+    common_above = max(total_chunks * COMMON_ABOVE, COMMON_FLOOR)
+    content = [term for term in terms if len(hits[term]) <= common_above] or terms
+    # Only informative words move the ranking. A function word matches almost anywhere,
+    # so six of them used to outweigh the two words the question was actually about —
+    # and widening makes this catch them: a question word shortened to its stem lands in
+    # a fifth of the vault, which is precisely what COMMON_ABOVE is looking for.
     for term, ids in hits.items():
         for chunk_id in ids:
-            mass[chunk_id] += weights[term]
             matched_terms[chunk_id] += 1
-            if term in content:
-                matched_content[chunk_id] += 1
+    for term in content:
+        for chunk_id in hits[term]:
+            mass[chunk_id] += weights[term]
+            matched_content[chunk_id] += 1
     # Weak means no single chunk holds even two of the query's meaningful words. That is
     # a fact about the vault, not a score: without it the top hit is whatever rare word
     # happened to appear, and the answer gets synthesised from strangers.
@@ -146,7 +202,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
 
     rows = con.execute("""SELECT c.id,c.note_id,n.path,c.heading_path,c.body,bm25(chunks_fts) AS rank
         FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
-        WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""", (" OR ".join(terms), POOL)).fetchall()
+        WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""", (" OR ".join(content), POOL)).fetchall()
     text = [{"path": row["path"], "heading": row["heading_path"], "text": row["body"],
              "score": round(mass[row["id"]], 6), "terms_matched": matched_terms[row["id"]],
              "found_by": "text", "_id": row["id"], "_note": row["note_id"], "_bm25": row["rank"]}
