@@ -145,4 +145,27 @@ with tempfile.TemporaryDirectory() as tmp:
     assert weak["coverage"]["matched_chunks"] >= 11, weak["coverage"]
     assert isinstance(covering["coverage"]["expanded_notes"], int), covering["coverage"]
 
+
+# The graph lane once reserved its slice up front, so a text fragment larger than the
+# remaining share left nothing to expand from and no neighbour ever appeared — the same
+# dead lane the reserve exists to prevent, arriving from the other side.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    (vault / "seed.md").write_text(
+        # No sentence ends and no blank line, so the chunker cannot split it: this is
+        # how a single fragment grows past the reserved share in a real vault.
+        "# Seed\n\nbulkyword heftyword " + "filler " * 800 + "\n\n[[answer]]\n")
+    (vault / "answer.md").write_text("# Answer\n\nthe neighbour that explains the seed\n")
+    done = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "bulkyword heftyword",
+         "--vault", str(vault), "--db", str(home / "bulk.db")],
+        capture_output=True, text=True, check=True)
+    bulky = json.loads(done.stdout)
+    assert bulky["fragments"], bulky["coverage"]
+    assert len(bulky["fragments"][0]["text"].encode()) > 8000 * 0.6, "fixture is not large enough"
+    assert bulky["coverage"]["returned_by_link"] > 0, bulky["coverage"]
+    assert any(f["found_by"] == "text" for f in bulky["fragments"]), bulky["fragments"]
+
 print("ok")

@@ -153,10 +153,12 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             for row in rows]
     text.sort(key=lambda item: (-item["score"], item["_bm25"]))
 
-    # The graph lane gets a reserved slice up front: text always outscores link
-    # neighbours, so a single shared budget means neighbours are never returned.
-    reserved = int(budget * graph_share)
-    kept_text, _ = apply_budget(text, budget - reserved)
+    # Text fills first, then neighbours take the remainder. Only if neighbours exist
+    # and got nothing does the text tail give up the reserved slice — that is the
+    # measured failure this reserve is for: on a live vault every neighbour used to be
+    # crowded out by text. Reserving up front instead would evict a single large text
+    # fragment that is the actual answer.
+    kept_text, _ = apply_budget(text, budget)
     seeds: list[tuple[int, float]] = []
     for item in kept_text:
         if item["_note"] not in [note for note, _ in seeds]:
@@ -166,9 +168,9 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     con.close()
 
     kept_links, _ = apply_budget(links, budget - _size(kept_text))
-    if _size(kept_text) + _size(kept_links) < budget:
-        # The graph branch did not need its whole slice; give the rest back to text.
-        kept_text, _ = apply_budget(text, budget - _size(kept_links))
+    if links and not kept_links:
+        kept_text, _ = apply_budget(text, budget - int(budget * graph_share))
+        kept_links, _ = apply_budget(links, budget - _size(kept_text))
     kept = kept_text + kept_links
     for item in kept:
         for private in ("_id", "_note", "_bm25"):
