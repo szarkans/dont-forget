@@ -107,11 +107,10 @@ def make_chunks(title: str, body: str) -> list[tuple[str, str, int]]:
             while stack and stack[-1][0] >= level:
                 stack.pop()
             stack.append((level, name))
-            end = len(body)
-            for later in matches[i + 1 :]:
-                if len(later.group(1)) <= level:
-                    end = later.start()
-                    break
+            # A section ends at the NEXT heading of any level. Ending it at the next
+            # heading of the same level made an H1 swallow the whole note, so every
+            # subsection was indexed twice — once inside the H1, once on its own.
+            end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
             sections.append(([x[1] for x in stack], body[match.start() : end].strip()))
     chunks, ordinal = [], 0
     for path, section in sections:
@@ -210,6 +209,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", type=Path)
     parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     args = parser.parse_args()
     vault = args.vault
     if vault is None:
@@ -220,7 +220,7 @@ def main() -> None:
             parser.error(f"cannot read vault from {config_path}: {error}")
     if not vault.is_dir():
         parser.error(f"vault is not a directory: {vault}")
-    print(json.dumps(build(vault, rebuild=args.rebuild), ensure_ascii=False))
+    print(json.dumps(build(vault, args.db, args.rebuild), ensure_ascii=False))
 
 
 if __name__ == "__main__":

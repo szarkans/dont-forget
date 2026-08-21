@@ -65,4 +65,33 @@ with tempfile.TemporaryDirectory() as tmp:
         env=env, capture_output=True, text=True, check=True,
     )
     assert json.loads(second.stdout)["coverage"]["text_matches"] == 1
+# Regression: text matches used to fill the whole budget, so link neighbours — the only
+# thing this search does that plain FTS5 does not — never reached the output. Fragment
+# sizes here are deliberately realistic: with tiny neighbours the old code passed too.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    for n in range(300):
+        (vault / f"noise{n}.md").write_text(
+            f"# Noise {n}\n\nworkers retry tasks in batch {n}. "
+            + f"context line {n} about queues and jobs. " * 18
+        )
+    (vault / "seed.md").write_text(
+        "# Seed\n\nworkers retry tasks here. "
+        + "seed context about the same queues. " * 18 + "\n\n[[answer]]\n"
+    )
+    (vault / "answer.md").write_text(
+        "# Answer\n\nexponential backoff caps at five attempts. "
+        + "reason and consequences spelled out. " * 18
+    )
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "workers retry tasks",
+         "--vault", str(vault), "--db", str(home / "test.db")],
+        capture_output=True, text=True, check=True,
+    )
+    coverage = json.loads(result.stdout)["coverage"]
+    assert coverage["returned_by_link"] > 0, coverage
+    assert not (Path.home() / ".dont-forget" / "test.db").exists()
+
 print("ok")
