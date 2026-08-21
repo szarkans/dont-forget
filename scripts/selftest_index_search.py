@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from index import extract_links, parse_frontmatter
+from index import _split_large, extract_links, parse_frontmatter
 from search import apply_budget, fts_query
 
 
@@ -37,6 +37,15 @@ assert fts_query("чанк") == '"чанк"*'
 assert fts_query("чанк тест") == '"чанк"* OR "тест"*'
 assert fts_query("chunks") == '"chunks"'
 assert fts_query("кот") == '"кот"'
+
+# A MOC is a list of links with no sentence ends anywhere, so the sentence splitter
+# used to hand it back whole: one chunk of ten kilobytes, larger than the entire search
+# budget, which made every query whose best match was that MOC return nothing at all.
+moc = "\n".join(f"- [[Заметка номер {n}]] — почему она тут" for n in range(400))
+parts = _split_large(moc)
+assert parts, "a link list must still produce chunks"
+assert max(len(part.encode()) for part in parts) <= 1200, max(len(p.encode()) for p in parts)
+assert "".join(parts).count("[[") == 400, "no link may be lost while splitting"
 
 items = [{"text": "я" * 3}, {"text": "x"}]
 kept, dropped = apply_budget(items, 6)

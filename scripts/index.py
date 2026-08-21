@@ -71,6 +71,24 @@ def extract_links(body: str) -> list[str]:
     return targets
 
 
+def _split_lines(unit: str, limit: int) -> list[str]:
+    """Last resort for text the sentence splitter cannot divide.
+
+    A MOC is a list of wikilinks with no sentence ends at all, so it used to survive
+    as one chunk of ten kilobytes — larger than the whole search budget, which meant
+    a query whose best match was that MOC returned nothing at all.
+    """
+    parts, current = [], ""
+    for line in unit.splitlines(keepends=True):
+        if current and len((current + line).encode()) > limit:
+            parts.append(current.strip())
+            current = ""
+        current += line
+    if current.strip():
+        parts.append(current.strip())
+    return [part for part in parts if part]
+
+
 def _split_large(text: str, limit: int = 1200) -> list[str]:
     if len(text.encode()) <= limit:
         return [text]
@@ -83,11 +101,11 @@ def _split_large(text: str, limit: int = 1200) -> list[str]:
         if len(unit.encode()) <= limit:
             current += unit
             continue
-        # A single indivisible paragraph/sentence is kept whole: sentences are never cut.
+        # Sentences are never cut, but a unit with no sentence ends still has lines.
         if current.strip():
             out.append(current.strip())
             current = ""
-        out.append(unit.strip())
+        out.extend(_split_lines(unit, limit))
     if current.strip():
         out.append(current.strip())
     return [part for part in out if part]
