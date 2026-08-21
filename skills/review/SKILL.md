@@ -30,7 +30,7 @@ Treat `--full` as consent to execute the save chain.
 - [ ] Capture an origin anchor before saving: the session's first request, `git rev-parse HEAD`, and `git status --short`.
 - [ ] Invoke `this` first to save the supported candidates.
 - [ ] Invoke `session` second to create the session note.
-- [ ] Keep that order; do not combine or substitute the two commands.
-- [ ] Afterward, offer `checkup` for the git commit and health check, but do not run it automatically.
+- [ ] Keep that order; do not combine or substitute the commands.
+- [ ] Invoke `checkup` third and last. `--full` is consent for the whole chain, and its commit is local to the vault; asking for it separately turns a one-command close-out back into a conversation.
 - [ ] Verify actual persistence: new notes appear in `git status`, and each has a type, atomic scope, and a meaningful link.
 - [ ] Compare the final state with the origin anchor. If git and state did not change, say `already in order, nothing to redo`; do not imply work happened.
