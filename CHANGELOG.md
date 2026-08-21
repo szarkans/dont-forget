@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.1 — 21.08.2026
+
+Ребриф цели и три дефекта, найденные при разборе беты.
+
+- Цель проекта в спеке приведена к фактической: личный инструмент, а не
+  исследовательский проект. §11 «не строить новый mnemo, пока не доказано» снят
+  сознательно, с датой и причиной. Роль проверки передана журналу `:feedback`;
+  триггер возврата к векторам и замеру — 3 записи `proven-miss`, считает скрипт.
+- `search.py`: обход графа перестал быть мёртвым кодом. Соседи находились и
+  выбрасывались бюджетом — на живом волте 105 найденных соседей давали 0 фрагментов
+  в выдаче. Починены сортировка перед бюджетом, отсечка вместо жадной набивки,
+  резерв бюджета под графовую ветку. Добавлены `--vault` и `--db` (и `--db` в
+  `index.py`), чтобы проверка на тестовом волте не трогала боевой индекс.
+- Удалён handoff-индекс: писатель без читателя, скопированный из mnemo вместе
+  с константами. −157 строк.
+- `SessionStart`-хук: обновляет индекс перед чтением, отдаёт хвосты только текущего
+  проекта, помечает поданную память как цитату. Убран двойной префикс в именах сессий.
+
 ## 0.1.0-beta — 2026-08-21
 
 First working build: a personal memory plugin for Claude Code that reimplements
@@ -72,7 +90,7 @@ The vault stays untouched as a data format; Obsidian remains the human interface
 - Handoff legacy format, five migration scripts, handoff resolver, handoff
   archiver.
 - Stop/autocompact nudges and the invocation-echo hook (no measured need yet).
-- Vector search / embeddings — postponed, see BACKLOG.md.
+- Vector search / embeddings — postponed, see docs/BACKLOG.md.
 
 ### Known limits
 
