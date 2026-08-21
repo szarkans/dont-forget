@@ -12,8 +12,9 @@ A group of .md files for every gotcha/session-handoff/idea/fact you had whilist 
 By that you can recall "oh, we did that two years ago!" or "wait no, that messed up our database two month ago" and things like so.    
 recall your memories by local lightweight "rag" to get every note about this particular thing - maybe you'll find some cross-references from other projects!
 
-> Why not claude-mem/<insert other memory plugin>?  
-You may ask. claude-mem is fast-memory (like RAM), agent always sees it. dont-forget, on the other hand, is long-term memory (like HDD) - both for you and your agent.
+> Why not claude-mem/<insert other memory plugin>?
+
+You may ask. claude-mem is fast-memory (like RAM), agent always sees it. `dont-forget`, on the other hand, is long-term memory (like HDD) - both for you and your agent.
 
 ## Commands
 
@@ -29,7 +30,7 @@ You may ask. claude-mem is fast-memory (like RAM), agent always sees it. dont-fo
 
 ## Install
 
-
+TBA
 
 ## Why your readme is written like that?
 
