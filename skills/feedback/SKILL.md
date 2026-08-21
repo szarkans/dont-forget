@@ -1,5 +1,5 @@
 ---
-name: df-feedback
+name: feedback
 description: Log proven memory-search failures and wins when they occur.
 ---
 

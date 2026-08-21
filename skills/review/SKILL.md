@@ -1,5 +1,5 @@
 ---
-name: df-review
+name: review
 description: Audit a work session for facts and commitments that were not saved.
 ---
 

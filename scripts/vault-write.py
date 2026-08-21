@@ -11,18 +11,25 @@ import sys
 import tempfile
 from pathlib import Path
 
+from common import vault_from_config
+
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def vault_from_config() -> Path:
-    config = Path.home() / ".dont-forget" / "config.json"
-    with config.open(encoding="utf-8") as handle:
-        value = json.load(handle).get("vault")
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"missing vault in {config}")
-    return Path(value).expanduser()
+def atomic_write(target: Path, data: bytes) -> None:
+    """Replace the target in one step so a reader never sees a half-written note."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".vault-write-", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(data)
+        os.replace(temporary, target)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def validate_filename(filename: object) -> str:
@@ -44,16 +51,7 @@ def write_note(vault: Path, filename: str, content: str) -> str:
             return "exists-same"
         print(f"conflict: {filename} already exists with different content", file=sys.stderr)
         return "conflict"
-    vault.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=vault, prefix=".vault-write-", delete=False) as handle:
-            temporary = Path(handle.name)
-            handle.write(incoming)
-        os.replace(temporary, target)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    atomic_write(target, incoming)
     return "created"
 
 
@@ -65,16 +63,7 @@ def replace_note(vault: Path, filename: str, content: str, expected_sha: str) ->
     if digest(target.read_bytes()) != expected_sha:
         print(f"conflict: {filename} content changed", file=sys.stderr)
         return "conflict"
-    incoming = content.encode("utf-8")
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=vault, prefix=".vault-write-", delete=False) as handle:
-            temporary = Path(handle.name)
-            handle.write(incoming)
-        os.replace(temporary, target)
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    atomic_write(target, content.encode("utf-8"))
     return "replaced"
 
 

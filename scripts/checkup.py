@@ -7,8 +7,8 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-DEFAULT_DB = Path.home() / ".dont-forget" / "index.db"
-DEFAULT_FEEDBACK = Path.home() / ".dont-forget" / "feedback.jsonl"
+from common import DEFAULT_DB, DEFAULT_FEEDBACK, connect_ro
+
 VERDICTS = ("saved-work", "noise", "false-note", "proven-miss")
 STALE_DAYS = 60
 LIMIT = 50
@@ -48,7 +48,7 @@ def feedback_summary(path, now=None):
 
 
 def report(db_path, stale_days=STALE_DAYS, feedback_path=DEFAULT_FEEDBACK):
-    con = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    con = connect_ro(db_path)
     con.row_factory = sqlite3.Row
     by_type = {row[0] or "": row[1] for row in con.execute(
         "SELECT type, count(*) FROM notes GROUP BY type ORDER BY type"
@@ -97,7 +97,7 @@ def main():
     parser.add_argument("--feedback", type=Path, default=DEFAULT_FEEDBACK)
     args = parser.parse_args()
     if not args.db.is_file():
-        parser.error("index not found; сначала запусти index.py")
+        parser.error("index not found; run index.py first")
     print(json.dumps(report(args.db, feedback_path=args.feedback), ensure_ascii=False, indent=2))
 
 

@@ -1,5 +1,5 @@
 ---
-name: df-this
+name: this
 description: "Persist durable knowledge when it would change how a future session behaves. Capture atomic, deduplicated vault notes or route actionable code rules to the appropriate rules file."
 model: inherit
 ---

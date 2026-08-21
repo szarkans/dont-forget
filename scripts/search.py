@@ -5,41 +5,55 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sqlite3
-import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
-DEFAULT_DB = Path.home() / ".dont-forget" / "index.db"
+from common import DEFAULT_DB, connect_ro
+from index import refresh_index
+
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
-CYRILLIC = re.compile(r"^[\u0400-\u04ff]+$")
+CYRILLIC = re.compile(r"^[Ѐ-ӿ]+$")
+# How many top-bm25 chunks are re-ranked. The pool is reported, so a query that
+# fills it is visibly a query whose full result set was never examined.
+POOL = 500
+# A word sitting in more than this share of the vault is not a search term.
+COMMON_ABOVE = 0.5
 
 
-def refresh_index(vault: Path | None = None, db_path: Path | None = None) -> str | None:
-    """Run the incremental indexer, returning a readable error on failure."""
-    index_script = Path(__file__).with_name("index.py")
-    command = [sys.executable, str(index_script)]
-    if vault is not None:
-        command += ["--vault", str(vault)]
-    if db_path is not None:
-        command += ["--db", str(db_path)]
-    try:
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    except OSError as error:
-        return f"could not start {index_script}: {error}"
-    if completed.returncode == 0:
-        return None
-    detail = completed.stderr.strip() or completed.stdout.strip() or f"exit code {completed.returncode}"
-    return f"{index_script} failed: {detail}"
+def parse_terms(query: str) -> list[str]:
+    """One FTS term per distinct query word, in the order the user typed them.
+
+    Cyrillic gets an explicit prefix wildcard because the porter stemmer only
+    knows English; English relies on the stemmer instead of a wildcard.
+    """
+    terms: list[str] = []
+    for word in WORD.findall(query):
+        escaped = word.replace('"', '""')
+        term = f'"{escaped}"*' if len(word) >= 4 and CYRILLIC.fullmatch(word) else f'"{escaped}"'
+        if term not in terms:
+            terms.append(term)
+    return terms
 
 
 def fts_query(query: str) -> str:
-    terms = []
-    for word in WORD.findall(query):
-        escaped = word.replace('"', '""')
-        terms.append(f'"{escaped}"*' if len(word) >= 4 and CYRILLIC.fullmatch(word) else f'"{escaped}"')
-    return " OR ".join(terms)
+    return " OR ".join(parse_terms(query))
+
+
+def term_weights(con: sqlite3.Connection, terms: list[str]) -> tuple[dict[str, set[int]], dict[str, float]]:
+    """Ask SQLite which chunks each term hits, and how rare that term is.
+
+    Asking per term instead of reproducing the tokenizer in Python is the only way
+    the weights cannot drift from what the index actually matched.
+    """
+    total = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
+    hits = {term: {row[0] for row in con.execute(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?", (term,))} for term in terms}
+    weights = {term: math.log(1 + total / (1 + len(ids))) for term, ids in hits.items()}
+    return hits, weights
 
 
 def apply_budget(items: list[dict], budget: int) -> tuple[list[dict], int]:
@@ -59,79 +73,115 @@ def apply_budget(items: list[dict], budget: int) -> tuple[list[dict], int]:
     return kept, len(items) - len(kept)
 
 
-def split_budget(items: list[dict], budget: int, graph_share: float) -> list[dict]:
-    """Give the graph branch a reserved slice, then let it use whatever text left.
+def _size(items: list[dict]) -> int:
+    return sum(len(item["text"].encode("utf-8")) for item in items)
 
-    Text matches always outnumber link neighbours and always score higher, so a
-    single shared budget means neighbours are never returned at all.
+
+def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap: int,
+                seen_chunks: set[int]) -> tuple[list[dict], list[dict], int]:
+    """Fragments one link away from the fragments actually being returned.
+
+    Expanding the shown fragments rather than every bm25 hit is what stops a single
+    irrelevant top hit from also filling the graph lane with its neighbours.
     """
-    text = sorted((i for i in items if i["found_by"] == "text"), key=lambda i: -i["score"])
-    links = sorted((i for i in items if i["found_by"] == "link"), key=lambda i: -i["score"])
-    size = lambda kept: sum(len(i["text"].encode("utf-8")) for i in kept)
-    reserved = int(budget * graph_share) if links else 0
-    kept_text, _ = apply_budget(text, budget - reserved)
-    kept_links, _ = apply_budget(links, budget - size(kept_text))
-    if size(kept_text) + size(kept_links) < budget:
-        # The graph branch did not need its whole slice; give the rest back to text.
-        kept_text, _ = apply_budget(text, budget - size(kept_links))
-    return kept_text + kept_links
-
-
-def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DEFAULT_DB,
-           graph_share: float = 0.4) -> dict:
-    expression = fts_query(query)
-    if not expression:
-        return {"fragments": [], "coverage": {"matched_total": 0, "returned": 0, "dropped_by_budget": 0, "skipped_hubs": []}}
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    con.row_factory = sqlite3.Row
-    rows = con.execute("""SELECT c.id,c.note_id,n.path,c.heading_path,c.body,bm25(chunks_fts) AS rank
-        FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
-        WHERE chunks_fts MATCH ? ORDER BY rank LIMIT 200""", (expression,)).fetchall()
-    items, seen_chunks = [], set()
-    seed_notes, seed_scores = [], {}
-    for row in rows:
-        seen_chunks.add(row["id"])
-        if row["note_id"] not in seed_notes:
-            seed_notes.append(row["note_id"])
-            seed_scores[row["note_id"]] = float(-row["rank"])
-        items.append({"path": row["path"], "heading": row["heading_path"], "text": row["body"],
-                      "score": round(float(-row["rank"]), 6), "found_by": "text"})
-    skipped, neighbor_scores, expanded = [], {}, []
-    for note_id in seed_notes[:20]:
-        seed_score = seed_scores[note_id]
+    skipped, scores = [], {}
+    for note_id, seed_score in seeds:
         note = con.execute("SELECT path,title FROM notes WHERE id=?", (note_id,)).fetchone()
         degree = con.execute("SELECT count(*) FROM links WHERE src_note_id=?", (note_id,)).fetchone()[0]
         if degree > hub_cap:
             skipped.append({"path": note["path"], "title": note["title"], "outgoing_links": degree})
             continue
-        if degree:
-            expanded.append({"path": note["path"], "title": note["title"], "outgoing_links": degree})
         for query_sql in ("SELECT dst_note_id_or_null FROM links WHERE src_note_id=? AND dst_note_id_or_null IS NOT NULL",
                           "SELECT src_note_id FROM links WHERE dst_note_id_or_null=?"):
-            for (neighbor,) in con.execute(query_sql, (note_id,)):
+            for (neighbour,) in con.execute(query_sql, (note_id,)):
                 # A neighbour is only as relevant as the seed that reached it, and less so.
-                neighbor_scores[neighbor] = max(neighbor_scores.get(neighbor, -1e9), seed_score * 0.5)
-    neighbor_ids = set(neighbor_scores)
-    if neighbor_ids:
-        marks = ",".join("?" for _ in neighbor_ids)
-        graph_rows = con.execute(f"""SELECT c.id,c.note_id,n.path,c.heading_path,c.body FROM chunks c
-            JOIN notes n ON n.id=c.note_id WHERE c.note_id IN ({marks}) ORDER BY n.path,c.ord""", tuple(neighbor_ids)).fetchall()
-        taken = set()
-        for row in graph_rows:
-            # One fragment per neighbour note: otherwise a single note eats the graph lane.
-            if row["id"] in seen_chunks or row["note_id"] in taken:
-                continue
-            taken.add(row["note_id"])
-            items.append({"path": row["path"], "heading": row["heading_path"], "text": row["body"],
-                          "score": round(neighbor_scores[row["note_id"]], 6), "found_by": "link"})
+                scores[neighbour] = max(scores.get(neighbour, -1e9), seed_score * 0.5)
+    if not scores:
+        return [], skipped, 0
+    marks = ",".join("?" for _ in scores)
+    rows = con.execute(f"""SELECT c.id,c.note_id,n.path,c.heading_path,c.body FROM chunks c
+        JOIN notes n ON n.id=c.note_id WHERE c.note_id IN ({marks}) ORDER BY n.path,c.ord""",
+        tuple(scores)).fetchall()
+    items, taken = [], set()
+    for row in rows:
+        # One fragment per neighbour note: otherwise a single note eats the graph lane.
+        if row["id"] in seen_chunks or row["note_id"] in taken:
+            continue
+        taken.add(row["note_id"])
+        items.append({"path": row["path"], "heading": row["heading_path"], "text": row["body"],
+                      "score": round(scores[row["note_id"]], 6), "terms_matched": 0, "found_by": "link"})
+    items.sort(key=lambda item: -item["score"])
+    return items, skipped, len(scores)
+
+
+def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DEFAULT_DB,
+           graph_share: float = 0.4) -> dict:
+    terms = parse_terms(query)
+    budget = max(0, budget)
+    if not terms:
+        return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
+                "dropped_by_budget": 0, "weak_match": False, "skipped_hubs": []}}
+    con = connect_ro(db_path)
+    con.row_factory = sqlite3.Row
+    hits, weights = term_weights(con, terms)
+
+    # Rank by how much of the query a chunk actually covers, not by bm25 alone: bm25
+    # rewards a short chunk holding one rare word over a long one holding several,
+    # which is how a backup note won a search about a rule.
+    mass: Counter[int] = Counter()
+    matched_terms: Counter[int] = Counter()
+    matched_content: Counter[int] = Counter()
+    total_chunks = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
+    content = [term for term in terms if len(hits[term]) < total_chunks * COMMON_ABOVE] or terms
+    for term, ids in hits.items():
+        for chunk_id in ids:
+            mass[chunk_id] += weights[term]
+            matched_terms[chunk_id] += 1
+            if term in content:
+                matched_content[chunk_id] += 1
+    # Weak means no single chunk holds even two of the query's meaningful words. That is
+    # a fact about the vault, not a score: without it the top hit is whatever rare word
+    # happened to appear, and the answer gets synthesised from strangers.
+    weak = len(content) > 1 and max(matched_content.values(), default=0) < 2
+
+    rows = con.execute("""SELECT c.id,c.note_id,n.path,c.heading_path,c.body,bm25(chunks_fts) AS rank
+        FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
+        WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""", (" OR ".join(terms), POOL)).fetchall()
+    text = [{"path": row["path"], "heading": row["heading_path"], "text": row["body"],
+             "score": round(mass[row["id"]], 6), "terms_matched": matched_terms[row["id"]],
+             "found_by": "text", "_id": row["id"], "_note": row["note_id"], "_bm25": row["rank"]}
+            for row in rows]
+    text.sort(key=lambda item: (-item["score"], item["_bm25"]))
+
+    # The graph lane gets a reserved slice up front: text always outscores link
+    # neighbours, so a single shared budget means neighbours are never returned.
+    reserved = int(budget * graph_share)
+    kept_text, _ = apply_budget(text, budget - reserved)
+    seeds: list[tuple[int, float]] = []
+    for item in kept_text:
+        if item["_note"] not in [note for note, _ in seeds]:
+            seeds.append((item["_note"], item["score"]))
+    links, skipped, neighbour_notes = ([], [], 0) if weak else _neighbours(
+        con, seeds, hub_cap, {item["_id"] for item in text})
     con.close()
-    kept = split_budget(items, max(0, budget), graph_share)
-    return {"fragments": kept, "coverage": {"matched_total": len(items), "text_matches": len(rows),
-            "returned": len(kept), "returned_by_link": sum(1 for x in kept if x["found_by"] == "link"),
-            "dropped_by_budget": len(items) - len(kept),
-            "bytes_used": sum(len(x["text"].encode()) for x in kept),
-            "budget_bytes": budget, "skipped_hubs": skipped, "expanded_notes": expanded,
-            "graph_neighbor_notes": len(neighbor_ids)}}
+
+    kept_links, _ = apply_budget(links, budget - _size(kept_text))
+    if _size(kept_text) + _size(kept_links) < budget:
+        # The graph branch did not need its whole slice; give the rest back to text.
+        kept_text, _ = apply_budget(text, budget - _size(kept_links))
+    kept = kept_text + kept_links
+    for item in kept:
+        for private in ("_id", "_note", "_bm25"):
+            item.pop(private, None)
+    return {"fragments": kept, "coverage": {
+        "matched_chunks": len(mass), "pool_examined": len(rows), "returned": len(kept),
+        "returned_by_link": len(kept_links),
+        "dropped_by_budget": len(text) + len(links) - len(kept),
+        "query_terms": len(terms), "content_terms": len(content),
+        "best_terms_matched": max(matched_content.values(), default=0), "weak_match": weak,
+        "bytes_used": _size(kept), "budget_bytes": budget,
+        "skipped_hubs": skipped, "expanded_notes": len(seeds) - len(skipped),
+        "graph_neighbor_notes": neighbour_notes}}
 
 
 def main() -> None:
@@ -149,7 +199,7 @@ def main() -> None:
     query = args.query if args.query is not None else payload.get("query", "")
     budget = int(payload.get("budget", args.budget))
     hub_cap = int(payload.get("hub_cap", args.hub_cap))
-    index_error = refresh_index(args.vault, args.db if args.db != DEFAULT_DB else None)
+    index_error = refresh_index(args.vault, args.db)
     if index_error and not args.db.exists():
         raise SystemExit(f"search.py: index refresh failed: {index_error}")
     result = search(query, budget, hub_cap, args.db, args.graph_share)

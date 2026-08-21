@@ -1,5 +1,5 @@
 ---
-name: df-checkup
+name: checkup
 description: Commit the vault and report its indexed health.
 model: inherit
 ---

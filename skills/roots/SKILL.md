@@ -1,6 +1,7 @@
 ---
 name: roots
-description: Easter egg
+description: ROOTS
+disable-model-invocation: true
 ---
 
 # ROOTS

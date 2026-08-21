@@ -1,5 +1,5 @@
 ---
-name: df-about
+name: about
 description: "Use mid-task whenever past work might cover the current step — before re-fixing a bug, entering new code, or making a hard-to-reverse change. Also when the user asks to recall prior context: 'what did we decide about X', 'что мы решили про', 'как делали', 'вспомни', 'напомни', 'не забудь про', or similar. Searches the vault with full-text search and link traversal, and synthesizes an answer with citations and a coverage report."
 model: inherit
 ---
@@ -41,16 +41,25 @@ and do not fabricate an answer.
 
 ## Coverage
 
-End the answer with a separate concise report. Always include these fields from
-`coverage`:
+End the answer with a separate concise report drawn from `coverage`: total matching
+chunks (`matched_chunks`), how many fragments came back (`returned`), how many were
+cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`. `matched_chunks`
+counts the whole vault, while `pool_examined` is how many of those were re-ranked — when
+the two are equal nothing was cut before ranking, and when `pool_examined` is smaller
+say that the tail was never examined.
 
-- total matches — `matched_total`;
-- returned fragments — `returned`;
-- omitted due to budget — `dropped_by_budget`;
-- hubs that were not expanded — `skipped_hubs`.
+`weak_match: true` is the most important field. It means no single chunk in the vault
+contains even two of the meaningful words of the question — the fragments are the
+closest text, not an answer. Say that first, in the user's words, before anything else:
+the vault has nothing on this. Then you may show what came closest, clearly labelled as
+such. Never synthesise a confident answer over a weak match, and never let a weak match
+produce a conclusion the user could act on. `best_terms_matched` and `content_terms`
+give the plain numbers behind the flag.
 
-A large `matched_total` with a small `returned` is important evidence of incomplete
-coverage, not a reason to silently add notes beyond the results. `expanded_notes` may
-be large: summarize it to its essence instead of dumping the full list on the user.
-You may mention `graph_neighbor_notes` briefly as the scale of link traversal, but do
-not turn it into a list.
+`returned_by_link` counts fragments reached through links rather than text; they are
+neighbours of the fragments above them and are weaker evidence. `expanded_notes` and
+`graph_neighbor_notes` are the scale of that traversal — mention them in passing at
+most, never as a list.
+
+A large `matched_chunks` with a small `returned` is evidence of incomplete coverage,
+not a reason to silently add notes beyond the results.

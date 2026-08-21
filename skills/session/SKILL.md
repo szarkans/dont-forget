@@ -1,5 +1,5 @@
 ---
-name: df-session
+name: session
 description: Record a verified session note and index its open threads.
 ---
 

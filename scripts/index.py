@@ -11,7 +11,8 @@ import sqlite3
 import time
 from pathlib import Path
 
-DEFAULT_DB = Path.home() / ".dont-forget" / "index.db"
+from common import DEFAULT_DB, connect_ro, vault_from_config
+
 FM_LINE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 WIKILINK = re.compile(r"!?\[\[([^\]]+)\]\]")
@@ -151,7 +152,7 @@ def tokenizer_changed(db_path: Path) -> bool:
     if not db_path.exists():
         return False
     try:
-        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        con = connect_ro(db_path)
         row = con.execute("SELECT sql FROM sqlite_master WHERE name='chunks_fts'").fetchone()
         con.close()
     except sqlite3.Error:
@@ -224,6 +225,19 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
             "deleted": len(set(known) - disk_paths), "seconds": round(time.perf_counter() - started, 3)}
 
 
+def refresh_index(vault: Path | None = None, db_path: Path | None = None) -> str | None:
+    """Bring the index up to date, returning a readable error instead of raising.
+
+    Refreshing belongs to the indexer, not to its callers: search and the session
+    digest both need it, and neither should know how the index is built.
+    """
+    try:
+        build(vault if vault is not None else vault_from_config(), db_path or DEFAULT_DB)
+    except (OSError, ValueError, sqlite3.Error, json.JSONDecodeError) as error:
+        return f"{type(error).__name__}: {error}"
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", type=Path)
@@ -232,11 +246,10 @@ def main() -> None:
     args = parser.parse_args()
     vault = args.vault
     if vault is None:
-        config_path = Path.home() / ".dont-forget" / "config.json"
         try:
-            vault = Path(json.loads(config_path.read_text())["vault"])
-        except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-            parser.error(f"cannot read vault from {config_path}: {error}")
+            vault = vault_from_config()
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            parser.error(f"cannot read vault: {error}")
     if not vault.is_dir():
         parser.error(f"vault is not a directory: {vault}")
     print(json.dumps(build(vault, args.db, args.rebuild), ensure_ascii=False))

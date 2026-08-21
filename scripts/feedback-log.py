@@ -7,7 +7,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_FILE = Path.home() / ".dont-forget" / "feedback.jsonl"
+from common import DEFAULT_FEEDBACK as DEFAULT_FILE
+
 VERDICTS = ("saved-work", "noise", "false-note", "proven-miss")
 # Deferred is not cancelled only while the return condition is mechanical (SPEC §11).
 MISS_TRIGGER = 3
