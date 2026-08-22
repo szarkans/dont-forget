@@ -89,4 +89,4 @@ echo '{"vault": "~/你的/笔记/路径"}' > ~/.dont-forget/config.json
 
 ## 许可证
 
-MIT —— 见 [LICENSE](LICENSE)。
+MIT

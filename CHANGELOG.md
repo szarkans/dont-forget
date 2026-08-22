@@ -1,129 +1,162 @@
 # Changelog
 
+## 0.3.2 — 2026-08-22
+
+- Changelog is now written in English. The plugin is open source, so its history
+  has to be readable by whoever installs it; only the maintainer's own files stay
+  in Russian. Entries for 0.1.1 through 0.3.1 were translated, not rewritten — the
+  facts and measurements are unchanged.
+- One more personal project name removed from the 0.2.1 entry.
+- Release dates normalized to ISO (`2026-08-21`); three entries carried a
+  day-first format.
+
 ## 0.3.1 — 2026-08-22
 
-- Маршрут установки: `.claude-plugin/marketplace.json`, так что плагин ставится
-  через `/plugin marketplace add szarkans/dont-forget` + `/plugin install`.
-  Проверено вживую, а не написано по памяти.
-- README переписан по фактам: шесть команд вместо пяти, `checkup` про здоровье
-  волта (а не плагина), `review` про разбор сессии (а не откат), поиск назван
-  тем, чем является — полнотекстовый SQLite плюс обход ссылок, без эмбеддингов.
-  Добавлен обязательный шаг с `~/.dont-forget/config.json`.
-- Переводы README на русский и китайский.
-- Файл `LICENSE` (MIT) — раньше лицензия была заявлена в двух местах и ни в одном
-  не лежала.
-- Из кода убраны имена личных проектов: докстринга `hot-scan.py` и фикстура
-  самотеста стали безликими.
-- `experiments/` больше не в git: бенчмарк содержит реальные вопросы и заголовки
-  заметок волта, публиковать их нельзя.
+- Install route: `.claude-plugin/marketplace.json`, so the plugin installs with
+  `/plugin marketplace add szarkans/dont-forget` + `/plugin install`. Verified by
+  actually running it, not written from memory.
+- README rewritten against the facts: six commands instead of five, `checkup` is
+  about **vault** health (not plugin health), `review` is a look back over the
+  session (not a rollback), and search is called what it is — SQLite full-text
+  plus link traversal, no embeddings. Added the required
+  `~/.dont-forget/config.json` step.
+- README translated to Russian and Chinese.
+- `LICENSE` (MIT) — the license was claimed in two places and present in neither.
+- Personal project names removed from the code: the `hot-scan.py` docstring and a
+  selftest fixture are now anonymous.
+- `experiments/` is out of git: the benchmark holds real questions and real vault
+  note titles, which cannot be published.
 
 ## 0.3.0 — 2026-08-22
 
-- `about` теперь составляет поисковый запрос из вопроса и контекста (проект, ветка, свежая память), а не передаёт сообщение слово в слово. Замер: +6 попаданий / 0 потерь на обеих половинах бенчмарка (experiments/RESULTS.md).
-- Теневой лог: каждый вызов поиска пишет строку в `~/.dont-forget/queries.jsonl` (сырой вопрос через `--raw`, отправленный запрос, топ-5, weak_match). Это копилка проспективной фазы бенчмарка.
-- experiments/: замороженный бенчмарк — протокол, 81 настоящий вопрос + 10 ловушек, слепая разметка, 9 методов, одноразовый финальный прогон. Итог: движки неразличимы, прирост даёт только переписывание запроса; эмбеддинги и Obsidian-поиск не дали ничего.
+- `about` now composes the search query from the question plus context (project,
+  branch, recent memory) instead of passing the message through word for word.
+  Measured: +6 hits / 0 losses on both halves of the benchmark.
+- Shadow log: every search call appends a line to `~/.dont-forget/queries.jsonl`
+  (raw question via `--raw`, the query actually sent, top-5, `weak_match`). This
+  is the collection jar for the prospective phase of the benchmark.
+- Frozen search benchmark: a protocol, 81 real questions + 10 traps, blind
+  labeling, 9 methods, one single final run. Result: the engines are
+  indistinguishable; the only gain comes from rewriting the query. Embeddings and
+  Obsidian's own search added nothing.
 
-## 0.2.1 — 21.08.2026
+## 0.2.1 — 2026-08-21
 
-Реколл провалился на живом вопросе: «какие у нас там гочи по текстурам кошкокрафта»
-не нашёл ни одной из четырёх заметок про текстуры, которые в волте есть. Две причины,
-обе в ранжировании.
+Recall failed on a live question: "what are our gotchas with the textures on
+project X" found none of the four texture notes that are in the vault. Two causes,
+both in ranking.
 
-- **Словоформа больше не решает, найдётся заметка или нет.** Кириллица ищется префиксом,
-  а префикс — это «слово начинается с», поэтому `"текстурам"*` совпал с 1 чанком из 3132:
-  заметки написаны «текстуры». Теперь префикс укорачивается, пока укорачивание заметно
-  прибавляет чанков, и останавливается на корне — там, где прибавка иссякает. Словарь
-  для этого не нужен: словарём работает сам индекс, поэтому правило не привязано ни к
-  одному языку. Редкое точное слово не размывается: если короче ничего не прибавляет,
-  слово остаётся как есть.
-- **Служебные слова больше не двигают выдачу.** Дело было не в частоте: idf душит частое,
-  но «какие» сидит в 10 чанках из 3132 и по формуле оказалось самым информативным словом
-  запроса — хаб набрал 12,4 балла на «какие» + «у» + «по». Теперь в счёт идут только
-  слова, которые сидят не больше чем в 5% волта, и укорачивание само загоняет вопросные
-  слова в этот разряд («какие» → «как», четверть волта). Списка стоп-слов нет — он был бы
-  свой на каждый язык. У порога есть абсолютный пол в 20 чанков: в маленьком волте 5% —
-  это две заметки, и без пола любое настоящее слово выглядело бы служебным.
+- **Wordform no longer decides whether a note is found.** Cyrillic is searched by
+  prefix, and a prefix means "the word starts with", so `"текстурам"*` matched 1
+  chunk out of 3132: the notes are written "текстуры". Now the prefix is shortened
+  while shortening keeps adding a meaningful number of chunks, and stops at the
+  stem, where the gain dries up. No dictionary is needed for this: the index itself
+  acts as the dictionary, so the rule is not tied to any one language. A rare exact
+  word is not blurred: if shortening adds nothing, the word is left as it is.
+- **Function words no longer move the results.** The problem was not frequency:
+  idf suppresses the common, but "какие" ("which") sits in 10 chunks out of 3132
+  and by the formula came out as the most informative word in the query — a hub
+  scored 12.4 points on "какие" + "у" + "по". Now only words present in at most 5%
+  of the vault count, and the shortening itself drives question words into that
+  bracket ("какие" → "как", a quarter of the vault). There is no stop-word list —
+  it would have to be written per language. The threshold has an absolute floor of
+  20 chunks: in a small vault 5% is two notes, and without the floor every real
+  word would look like a function word.
 
-Побочный эффект: `weak_match` стал срабатывать чаще и честнее — он считает совпавшие
-содержательные слова, а раньше в этот счёт попадали «какие», «у» и «по», из-за чего флаг
-молчал на вопросе, ответа на который в волте нет.
+Side effect: `weak_match` now fires more often and more honestly — it counts
+matched content words, and previously "какие", "у" and "по" were counted too, which
+kept the flag silent on a question the vault has no answer to.
 
-Проверка: два новых самотеста в `selftest_index_search.py` — заметку, написанную одной
-словоформой, находит запрос в другой; запрос из шести служебных слов и одного
-содержательного выдаёт заметку по содержательному. Цена: поиск 0,16 с → 0,23 с.
+Verification: two new selftests in `selftest_index_search.py` — a note written in
+one wordform is found by a query in another; a query of six function words and one
+content word returns the note via the content word. Cost: search 0.16 s → 0.23 s.
 
-## 0.2.0 — 21.08.2026
+## 0.2.0 — 2026-08-21
 
-Ревью качества: поиск перестал уверенно отвечать на то, чего в волте нет.
+Quality review: search stopped answering confidently about things the vault does
+not contain.
 
-- **Ранжирование по покрытию запроса, а не по bm25.** bm25 награждает короткий чанк
-  с одним редким словом сильнее, чем длинный со всеми словами запроса: на живом волте
-  запрос «правило остановки» первым выдавал заметку про бэкапы другого проекта. Теперь чанки
-  сортируются по сумме idf *различных* совпавших слов, bm25 — только тай-брейк. Веса
-  и совпадения спрашиваются у самого FTS5 (по одному запросу на слово), чтобы они не
-  разъезжались с тем, что индекс реально сматчил.
-- **`weak_match` — признание «в волте этого нет».** Флаг поднимается, когда ни один
-  чанк не содержит даже двух значимых слов запроса (значимое = встречается меньше чем
-  в половине чанков). Проверено на восьми живых запросах: поднялся ровно на двух
-  заведомо отсутствующих темах, на шести реальных — нет, и топ-1 у всех шести по делу.
-  Скилл `about` обязан сказать это первой фразой и не синтезировать ответ.
-- **Граф больше не усиливает мусор.** Соседи берутся только у фрагментов, которые
-  реально попали в выдачу, а не у всех топ-20 bm25. При `weak_match` обход графа не
-  запускается вовсе. Раньше плохой топ-1 гарантированно затаскивал в ответ ещё и двух
-  своих соседей.
-- **Бюджет считал 42% вывода.** `coverage.expanded_notes` вываливал двадцать полных
-  заголовков — 6600 байт при бюджете 8000, которые скилл всё равно велел свернуть.
-  Теперь это число. Тот же запрос: stdout 17105 → 11652 байта, coverage 6600 → 303.
-- **`matched_total` был насыщенным счётчиком** — упирался в `LIMIT 200` и врал
-  одинаково при 201 и при 5000 совпадений. Заменён на честный `matched_chunks` по
-  всему волту плюс отдельный `pool_examined` (сколько переранжировано).
-- `hot-scan.py`: список из шести заголовков «незаконченного» был скопирован в SQL
-  руками, а константа `PENDING_HEADINGS` не использовалась нигде — седьмой заголовок
-  молча бы не заработал. Теперь SQL строится из константы.
-- `hot-scan.py`: ошибка обновления индекса больше не выбрасывается молча — тихо
-  протухший индекс неотличим от пустого. Теперь строка про это едет в дайджест.
-- `refresh_index` переехал из `search.py` в `index.py` и вызывает `build()` напрямую
-  вместо запуска подпроцесса с разбором его stderr. Заодно ушёл хак с `sys.path`
-  в `hot-scan.py` — каталог скрипта и так лежит в `sys.path`.
-- Новый `scripts/common.py`: пути, чтение конфига и открытие базы на чтение. До этого
-  `index.py` понимал `~/vault` буквально, а `vault-write.py` — как домашний каталог,
-  то есть заметки писались в одно место, а искались в другом.
-- `vault-write.py`: блок атомарной записи был скопирован дважды слово в слово.
-- Самотесты переименованы `test_*.py` → `selftest_*.py`. Под старым именем `pytest`
-  собирал ноль тестов и отвечал «no tests ran» — зелёное ничто в любом CI. Запуск:
-  `for t in scripts/selftest_*.py; do python3 "$t"; done`.
-- Найдено живой проверкой уже после правки: граф-полоса резервировала свою долю
-  заранее, поэтому один текстовый фрагмент крупнее остатка (в живом волте такие есть —
-  чанк без точек и пустых строк не режется на части) оставлял выдачу вообще пустой.
-  Полосы поменяли порядок: текст заполняется первым, соседи берут остаток, и только
-  если соседи есть, но не влезли, хвост текста отдаёт зарезервированную долю. Регрессия
-  закреплена тестом, который со старым порядком падает.
-- Найдено дедупликацией при сохранении заметок: чанкер не резал текст без точек и
-  пустых строк, поэтому MOC — список викиссылок — оставался одним чанком в 10 КБ,
-  крупнее всего бюджета выдачи. Запрос, у которого лучшее совпадение было таким MOC,
-  возвращал **ноль фрагментов** при 153 совпадениях: фрагмент не влезал, seed'ов для
-  графа не оставалось, соседей тоже. Теперь неделимая единица режется по строкам.
-  После правки самый большой чанк волта — 1096 символов вместо 10595.
-- Мелочи: `checkup.py` открывал базу иначе, чем остальные (ломалось на путях со
-  спецсимволами), и держал русскую строку ошибки в англоязычном коде.
+- **Ranking by query coverage, not by bm25.** bm25 rewards a short chunk holding
+  one rare word more than a long chunk holding every word of the query: on the live
+  vault, the query "правило остановки" ("stopping rule") returned a note about
+  another project's backups first. Chunks are now sorted by the summed idf of
+  *distinct* matched words, with bm25 as a tie-break only. Weights and matches are
+  asked of FTS5 itself (one query per word) so they cannot drift from what the
+  index actually matched.
+- **`weak_match` — an admission that "the vault does not have this".** The flag is
+  raised when no single chunk holds even two meaningful words of the query
+  (meaningful = occurring in fewer than half of the chunks). Checked on eight live
+  queries: raised on exactly the two topics known to be absent, not raised on the
+  six real ones, and the top-1 was on point for all six. The `about` skill must say
+  this in its first sentence and must not synthesize an answer.
+- **The graph no longer amplifies garbage.** Neighbors are taken only from
+  fragments that actually made it into the results, not from all bm25 top-20. On
+  `weak_match` the graph walk does not run at all. Previously a bad top-1 was
+  guaranteed to drag two of its neighbors into the answer as well.
+- **The budget was spending 42% of the output on bookkeeping.**
+  `coverage.expanded_notes` dumped twenty full titles — 6600 bytes against an 8000
+  budget, which the skill was told to collapse anyway. It is now a number. Same
+  query: stdout 17105 → 11652 bytes, coverage 6600 → 303.
+- **`matched_total` was a saturating counter** — it hit `LIMIT 200` and lied
+  identically at 201 and at 5000 matches. Replaced by an honest `matched_chunks`
+  over the whole vault plus a separate `pool_examined` (how many were re-ranked).
+- `hot-scan.py`: the list of six "pending" headings had been copied into the SQL by
+  hand while the `PENDING_HEADINGS` constant was used nowhere — a seventh heading
+  would have silently failed to work. The SQL is now built from the constant.
+- `hot-scan.py`: an index-refresh error is no longer swallowed — a silently stale
+  index is indistinguishable from an empty one. The digest now carries a line about
+  it.
+- `refresh_index` moved from `search.py` to `index.py` and calls `build()` directly
+  instead of spawning a subprocess and parsing its stderr. The `sys.path` hack in
+  `hot-scan.py` went away with it — the script's own directory is on `sys.path`
+  anyway.
+- New `scripts/common.py`: paths, config reading, and read-only database access.
+  Before it, `index.py` read `~/vault` literally while `vault-write.py` expanded it
+  to the home directory, so notes were written to one place and searched for in
+  another.
+- `vault-write.py`: the atomic-write block had been copied out twice, word for
+  word.
+- Selftests renamed `test_*.py` → `selftest_*.py`. Under the old name `pytest`
+  collected zero tests and answered "no tests ran" — a green nothing in any CI.
+  Run them with `for t in scripts/selftest_*.py; do python3 "$t"; done`.
+- Found by a live check after the fix: the graph lane reserved its share up front,
+  so a single text fragment larger than the remainder (the live vault has them — a
+  chunk with no periods and no blank lines is never split) left the results
+  completely empty. The lanes swapped order: text fills first, neighbors take the
+  remainder, and only if neighbors exist but do not fit does the tail of the text
+  give up the reserved share. The regression is pinned by a test that fails under
+  the old order.
+- Found while deduplicating notes on save: the chunker did not split text without
+  periods or blank lines, so a MOC — a list of wiki-links — stayed a single 10 KB
+  chunk, larger than the entire output budget. A query whose best match was such a
+  MOC returned **zero fragments** against 153 matches: the fragment did not fit, no
+  seeds were left for the graph, and so no neighbors either. An indivisible unit is
+  now split by lines. After the fix the largest chunk in the vault is 1096
+  characters instead of 10595.
+- Small things: `checkup.py` opened the database differently from everything else
+  (which broke on paths with special characters) and held a Russian error string in
+  otherwise English code.
 
-## 0.1.1 — 21.08.2026
+## 0.1.1 — 2026-08-21
 
-Ребриф цели и три дефекта, найденные при разборе беты.
+A rebrief of the project's goal, and three defects found while reviewing the beta.
 
-- Цель проекта в спеке приведена к фактической: личный инструмент, а не
-  исследовательский проект. §11 «не строить новый mnemo, пока не доказано» снят
-  сознательно, с датой и причиной. Роль проверки передана журналу `:feedback`;
-  триггер возврата к векторам и замеру — 3 записи `proven-miss`, считает скрипт.
-- `search.py`: обход графа перестал быть мёртвым кодом. Соседи находились и
-  выбрасывались бюджетом — на живом волте 105 найденных соседей давали 0 фрагментов
-  в выдаче. Починены сортировка перед бюджетом, отсечка вместо жадной набивки,
-  резерв бюджета под графовую ветку. Добавлены `--vault` и `--db` (и `--db` в
-  `index.py`), чтобы проверка на тестовом волте не трогала боевой индекс.
-- Удалён handoff-индекс: писатель без читателя, скопированный из mnemo вместе
-  с константами. −157 строк.
-- `SessionStart`-хук: обновляет индекс перед чтением, отдаёт хвосты только текущего
-  проекта, помечает поданную память как цитату. Убран двойной префикс в именах сессий.
+- The goal in the spec was brought in line with reality: a personal tool, not a
+  research project. §11 ("do not build a new mnemo until it is proven") was lifted
+  deliberately, with a date and a reason. The verification role passed to the
+  `:feedback` journal; the trigger for returning to vectors and measurement is 3
+  `proven-miss` entries, counted by a script.
+- `search.py`: the graph walk stopped being dead code. Neighbors were being found
+  and then thrown away by the budget — on the live vault, 105 neighbors found
+  produced 0 fragments in the output. Fixed: sorting before the budget, a cut-off
+  instead of greedy filling, and a budget reserve for the graph branch. Added
+  `--vault` and `--db` (and `--db` in `index.py`) so a check against a test vault
+  does not touch the real index.
+- Removed the handoff index: a writer with no reader, copied from mnemo along with
+  its constants. −157 lines.
+- `SessionStart` hook: refreshes the index before reading, returns open threads for
+  the current project only, and marks the injected memory as a quotation. Removed a
+  doubled prefix in session names.
 
 ## 0.1.0-beta — 2026-08-21
 

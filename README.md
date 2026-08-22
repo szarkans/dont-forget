@@ -81,7 +81,7 @@ fixed against evidence instead of vibes.
 
 ## What it does on its own
 
-At the start of every session it injects your open threads from the last 7 days —
+At the start of every session it injects your open threads from the last 7 days,
 the unfinished checkboxes from your session notes. No command needed.
 
 ## Why is your readme written like that?
@@ -93,4 +93,4 @@ Simple words prevail.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT
