@@ -56,9 +56,13 @@ def normalize(name: str) -> str:
 def same_project(note_project: str, project: str) -> bool:
     """Match loosely: vault notes spell one project many ways — acme, acme-corp, ACME Corp."""
     note_project = normalize(note_project or "")
+    project = normalize(project or "")
     if not note_project or not project:
         return False
-    return note_project.startswith(project) or project.startswith(note_project)
+    if note_project == project:
+        return True
+    shorter, longer = sorted((note_project, project), key=len)
+    return longer.startswith(shorter + "-")
 
 
 def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
@@ -81,16 +85,22 @@ def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
         return []
 
     tails = []
+    no_project_tails = []
     for path, note_project, body in rows:
-        if project and not same_project(note_project, project):
-            continue
+        if project:
+            if note_project and not same_project(note_project, project):
+                continue
+            destination = tails if note_project else no_project_tails
+        else:
+            destination = tails
         session_name = Path(path).stem.removeprefix("Session — ")
         for match in OPEN_ITEM.finditer(body):
             item = " ".join(match.group(0).strip()[2:].split())
             if len(item) > MAX_ITEM_CHARS:
                 item = item[: MAX_ITEM_CHARS - 1] + "…"
-            tails.append(f"{item} (Session — {session_name})")
-    return tails
+            suffix = ", no project" if project and not note_project else ""
+            destination.append(f"{item} (Session — {session_name}{suffix})")
+    return tails + no_project_tails
 
 
 def fit_budget(tails: list[str], note: str, budget: int) -> dict:

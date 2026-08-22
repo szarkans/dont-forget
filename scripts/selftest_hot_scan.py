@@ -81,12 +81,22 @@ with tempfile.TemporaryDirectory() as tmp:
     assert truncated["tails"][-1] == "> _truncated: 5 more open threads"
     assert len(truncated_raw) <= one_tail_size + 1
 
-    # The digest is per project: threads from other projects must not leak into a session.
+    # Projectless threads follow matched ones so budget truncation drops them first.
     scoped, scoped_raw = invoke(db, "--window", "7", "--project", "acme")
-    assert scoped["tails"] == ["[ ] belongs to another project (Session — Other project)"], scoped
-    assert b"ship fix" not in scoped_raw
+    assert scoped["tails"] == [
+        "[ ] belongs to another project (Session — Other project)",
+        "[ ] ship fix (Session — Fresh session, no project)",
+        "[ ] write docs (Session — Fresh session, no project)",
+        ("[ ] " + "long tail " * 30).strip()[:199] + "… (Session — Fresh session, no project)",
+        "[ ] filed under a heading nobody listed (Session — Fresh session, no project)",
+        "[ ] a thread under a non-ASCII heading (Session — Zeta cyrillic, no project)",
+    ], scoped
+    assert b", no project)" in scoped_raw
     assert "open threads in acme" in scoped["note"]
-    assert HOT_SCAN["same_project"]("ACME Corp", "acme") and not HOT_SCAN["same_project"]("widgets", "acme")
+    assert HOT_SCAN["same_project"]("ACME Corp", "acme")
+    assert HOT_SCAN["same_project"]("acme", "acme-corp")
+    assert not HOT_SCAN["same_project"]("catcraft", "cat")
+    assert not HOT_SCAN["same_project"]("widgets", "acme")
 
     missing, _ = invoke(root / "missing.db", "--project", "")
     assert missing == {"tails": [], "note": ""}
