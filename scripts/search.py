@@ -18,7 +18,6 @@ from common import DEFAULT_DB, DEFAULT_QUERY_LOG, connect_ro
 from index import refresh_index
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
-CYRILLIC = re.compile(r"^[Ѐ-ӿ]+$")
 # How many top-bm25 chunks are re-ranked. The pool is reported, so a query that
 # fills it is visibly a query whose full result set was never examined.
 POOL = 500
@@ -40,13 +39,16 @@ MIN_STEM = 3
 def parse_terms(query: str) -> list[str]:
     """One FTS term per distinct query word, in the order the user typed them.
 
-    Cyrillic gets an explicit prefix wildcard because the porter stemmer only
-    knows English; English relies on the stemmer instead of a wildcard.
+    Every word long enough to have endings gets a prefix wildcard, because the porter
+    stemmer in the index only knows English. Handing the wildcard to Cyrillic alone, as
+    this used to, left every other language with neither stemming nor prefixes: a German
+    vault answered "Textur" with nothing while "Texturen" sat in it. widen() then cuts
+    each prefix back using the vault's own word counts, so this stays language-agnostic.
     """
     terms: list[str] = []
     for word in WORD.findall(query):
         escaped = word.replace('"', '""')
-        term = f'"{escaped}"*' if len(word) >= 4 and CYRILLIC.fullmatch(word) else f'"{escaped}"'
+        term = f'"{escaped}"*' if len(word) >= 4 else f'"{escaped}"'
         if term not in terms:
             terms.append(term)
     return terms
@@ -264,10 +266,10 @@ def main() -> None:
     db_path = args.db or DEFAULT_DB
     index_error = refresh_index(args.vault, db_path)
     if index_error and not db_path.exists():
-        raise SystemExit(f"search.py: index refresh failed: {index_error}")
+        raise SystemExit(index_error)
     result = search(query, budget, hub_cap, db_path, args.graph_share)
     if index_error:
-        print(f"search.py: index refresh failed; searching stale index: {index_error}", file=sys.stderr)
+        print(f"{index_error} Searching the existing index, which may be stale.", file=sys.stderr)
         result["coverage"]["index_stale"] = True
     if args.vault is None and args.db is None:
         try:

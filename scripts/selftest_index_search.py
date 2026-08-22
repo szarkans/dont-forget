@@ -34,10 +34,17 @@ fake = "[[Код]]"
 ~~~
 """)
 assert links == ["Да", "Нет", "Вложение"], links
+# Every word long enough to carry endings gets a prefix wildcard, whatever alphabet it
+# is in. Handing it to Cyrillic alone left every other language with neither the porter
+# stemmer (which only knows English) nor a prefix: a German vault answered "Textur" with
+# nothing while "Texturen" sat in it.
 assert fts_query("чанк") == '"чанк"*'
 assert fts_query("чанк тест") == '"чанк"* OR "тест"*'
-assert fts_query("chunks") == '"chunks"'
+assert fts_query("chunks") == '"chunks"*'
+assert fts_query("Texturen") == '"Texturen"*'
+# Too short to be an inflected form; widening these only makes them vague.
 assert fts_query("кот") == '"кот"'
+assert fts_query("api") == '"api"'
 
 # A MOC is a list of links with no sentence ends anywhere, so the sentence splitter
 # used to hand it back whole: one chunk of ten kilobytes, larger than the entire search

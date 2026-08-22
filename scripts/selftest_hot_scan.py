@@ -44,15 +44,20 @@ with tempfile.TemporaryDirectory() as tmp:
             (1, "sessions/Fresh session.md", "Fresh", "session", "", fresh, "", 0, "a"),
             (2, "sessions/Old session.md", "Old", "session", "", old, "", 0, "b"),
             (3, "sessions/Other project.md", "Other", "session", "ACME Corp", fresh, "", 0, "c"),
+            (4, "sessions/Zeta cyrillic.md", "Zeta", "session", "", fresh, "", 0, "d"),
         ],
     )
     con.executemany(
         "INSERT INTO chunks VALUES(?,?,?,?,?)",
         [
             (1, 1, "Next steps / PENDING", "- [ ] ship fix\n- [x] done\n- [ ] write docs\n- [ ] " + "long tail " * 30, 0),
-            (2, 1, "Notes", "- [ ] must stay hidden", 1),
+            # An unticked box counts wherever it sits: a heading whitelist used to decide
+            # this, and it lost real threads to headings nobody had thought to list.
+            (2, 1, "Notes", "- [ ] filed under a heading nobody listed", 1),
             (3, 2, "Pending", "- [ ] too old", 0),
             (4, 3, "Pending", "- [ ] belongs to another project", 0),
+            # SQLite lower() only folds ASCII, so a whitelist could never match this one.
+            (5, 4, "Осталось", "- [ ] a thread under a non-ASCII heading", 0),
         ],
     )
     con.commit()
@@ -63,15 +68,17 @@ with tempfile.TemporaryDirectory() as tmp:
         "[ ] ship fix (Session — Fresh session)",
         "[ ] write docs (Session — Fresh session)",
         ("[ ] " + "long tail " * 30).strip()[:199] + "… (Session — Fresh session)",
+        "[ ] filed under a heading nobody listed (Session — Fresh session)",
         "[ ] belongs to another project (Session — Other project)",
-    ]
+        "[ ] a thread under a non-ASCII heading (Session — Zeta cyrillic)",
+    ], payload
     assert "last 7 days" in payload["note"]
-    assert b"too old" not in raw and b"must stay hidden" not in raw and b"done" not in raw
+    assert b"too old" not in raw and b"done" not in raw
 
-    one_tail_size = len(HOT_SCAN["encoded"]({"tails": [payload["tails"][0], "> _truncated: 3 more open threads"], "note": payload["note"]}))
+    one_tail_size = len(HOT_SCAN["encoded"]({"tails": [payload["tails"][0], "> _truncated: 5 more open threads"], "note": payload["note"]}))
     truncated, truncated_raw = invoke(db, "--window", "7", "--project", "", "--budget", str(one_tail_size + 1))
     assert truncated["tails"][0] == payload["tails"][0]
-    assert truncated["tails"][-1] == "> _truncated: 3 more open threads"
+    assert truncated["tails"][-1] == "> _truncated: 5 more open threads"
     assert len(truncated_raw) <= one_tail_size + 1
 
     # The digest is per project: threads from other projects must not leak into a session.

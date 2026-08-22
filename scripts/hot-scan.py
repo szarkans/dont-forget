@@ -14,10 +14,12 @@ from pathlib import Path
 from common import DEFAULT_DB, connect_ro
 from index import refresh_index
 
+# An unticked box in a session note is an unfinished thread, wherever it sits. Matching
+# a list of heading names instead used to lose real tails two ways: a heading nobody
+# thought to list, and SQLite's lower() being ASCII-only, which made every Cyrillic name
+# in that list dead on arrival. Measured on a live vault: the list found 359 tails, the
+# boxes find 375, and the 16 it had been dropping were all genuine.
 OPEN_ITEM = re.compile(r"^- \[ \](?:\s+.*)?$", re.MULTILINE)
-# Which heading holds the unfinished work. Notes written by hand or by an older tool
-# name it in the user's language, so matching only "pending" silently skipped them.
-PENDING_HEADINGS = ("pending", "next steps", "todo", "осталось", "следующие шаги", "хвосты")
 # One runaway tail must not push a dozen short ones out of the digest.
 MAX_ITEM_CHARS = 200
 
@@ -64,17 +66,15 @@ def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
         return []
 
     cutoff = (date.today() - timedelta(days=max(0, window))).isoformat()
-    heading_filter = " OR ".join("instr(lower(c.heading_path), ?) > 0" for _ in PENDING_HEADINGS)
     try:
         con = connect_ro(db_path)
         rows = con.execute(
-            f"""SELECT n.path, n.project, c.body
+            """SELECT n.path, n.project, c.body
                 FROM notes n JOIN chunks c ON c.note_id = n.id
                 WHERE lower(n.type) = 'session'
                   AND date(n.date) >= date(?)
-                  AND ({heading_filter})
                 ORDER BY date(n.date) DESC, n.path, c.ord""",
-            (cutoff, *PENDING_HEADINGS),
+            (cutoff,),
         ).fetchall()
         con.close()
     except sqlite3.Error:
@@ -130,8 +130,10 @@ def hook_payload(payload: dict) -> dict:
     if payload["tails"]:
         lines = [payload["note"], *(f"- {tail}" for tail in payload["tails"])]
     if payload.get("index_error"):
-        # A silently stale index looks exactly like an empty one, so say it out loud.
-        lines.append(f"dont-forget: index not refreshed, threads may be stale ({payload['index_error']}).")
+        # A silently stale index looks exactly like an empty one, and an unconfigured
+        # plugin looks exactly like a vault with nothing in it. Both get said out loud,
+        # in the words the error already carries.
+        lines.append(payload["index_error"])
     context = "\n".join(lines)
     return {
         "hookSpecificOutput": {
