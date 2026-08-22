@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.0 — 2026-08-23
+
+### Added
+- `aliases` frontmatter support: notes can list alternate names, stored in a new
+  `aliases` column, and `[[wiki-links]]` resolve through them too. A title still wins
+  over an alias, and an alias that names more than one note is left unresolved rather
+  than guessed. This is a schema change — the first run after upgrading does one full
+  index rebuild to pick it up.
+
+### Changed
+- `weak_match` is now computed from the idf mass share of the best chunk instead of a
+  raw matched-terms count, so a hit on a rare word counts for more than a hit on a
+  common one. Search results also report `unmatched_terms` — query words that don't
+  appear anywhere in the vault, in any form.
+
+### Fixed
+- Index refresh now stats files first and skips reading + hashing anything whose
+  mtime hasn't moved, instead of hashing the whole vault on every run. Measured
+  ~38% faster no-change refresh on drvfs vaults. Closes #6.
+  Known limitation: a content edit that lands with its old mtime preserved (some sync
+  tools do this) is invisible to the gate until the next `--rebuild`.
+- The Stop hook's context nudge now picks its checkpoint from the documented window
+  per model family (haiku 200k; fable/mythos 1M; sonnet-5 967k, its default compact
+  point; others 200k then 1M with `"[1m]"` evidence skipping the 200k stop) instead of
+  always starting from the 200k floor, which fired ~3x early on native big-window
+  models. A configured window is still capped by the model ceiling.
+
 ## 0.6.2 — 2026-08-23
 
 ### Fixed

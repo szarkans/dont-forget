@@ -55,6 +55,13 @@ Requirements: `python3`. No pip installs, no dependencies — standard library o
 > of which comes along — you'd get skills that crash on first use. Measured, not
 > guessed. Use the marketplace route above.
 
+## Performance
+
+On WSL2, keep your vault on the Linux filesystem, not under `/mnt/c`. Measured on a
+760-note vault: a no-change index refresh takes ~85 ms on ext4 versus ~6 s on `/mnt/c`
+(drvfs/9p per-file latency adds up fast). The `SessionStart` hook has a 10 s timeout,
+so a vault on `/mnt/c` can burn most of that budget before anything else runs.
+
 ## Commands
 
 `/dont-forget:this` — "hey, let's save this fact/gotcha/decision so we don't forget it".
