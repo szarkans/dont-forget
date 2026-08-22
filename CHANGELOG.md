@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.1 — 2026-08-22
+
+- Dots are now allowed in note filenames. The ban was inherited from mnemo's
+  obsidian-CLI workaround, and the cause it worked around is gone. The `#` ban
+  stays — it would break wikilink heading anchors. (#5)
+- `vault-write.py` now takes one exclusive flock on the vault directory before
+  dispatching, making the check-then-write paths of create and replace
+  race-free against concurrent `vault-write.py` runs; a concurrent writer can
+  no longer be silently overwritten. Windows (no `fcntl`) runs unlocked. (#3)
+
 ## 0.6.0 — 2026-08-22
 
 - The autocompact nudge now *offers* by default instead of instructing. Saving a session
