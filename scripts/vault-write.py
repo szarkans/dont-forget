@@ -38,8 +38,8 @@ def validate_filename(filename: object) -> str:
     path = Path(filename)
     if path.name != filename or "/" in filename or "\\" in filename:
         raise ValueError("filename must not contain a path")
-    if path.suffix != ".md" or not path.stem or "#" in path.stem or "." in path.stem:
-        raise ValueError("filename must be <non-empty stem>.md without '#' or '.'")
+    if path.suffix != ".md" or not path.stem or "#" in path.stem:
+        raise ValueError("filename must be <non-empty stem>.md without '#'")
     return filename
 
 

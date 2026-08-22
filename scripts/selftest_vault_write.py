@@ -61,9 +61,12 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert (vault / filename).read_text(encoding="utf-8") == replacement
 
     before = set(vault.iterdir())
-    for invalid in ("Atom — bad#name.md", "Atom — bad.name.md"):
-        refused = invoke(vault, invalid, "must not land")
-        assert refused.returncode != 0
-        assert set(vault.iterdir()) == before
+    refused = invoke(vault, "Atom — bad#name.md", "must not land")
+    assert refused.returncode != 0
+    assert set(vault.iterdir()) == before
+
+    dotted = invoke(vault, "Atom — v1.2 broke.md", "dotted name content")
+    assert dotted.returncode == 0, dotted.stderr
+    assert (vault / "Atom — v1.2 broke.md").read_text(encoding="utf-8") == "dotted name content"
 
 print("ok")
