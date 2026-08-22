@@ -34,11 +34,16 @@ SessionStart hook. Edit, restart, then judge.
 **You need a vault to run against.** Any folder of `.md` files:
 
 ```bash
-mkdir -p ~/.dont-forget
-echo '{"vault": "~/some/notes"}' > ~/.dont-forget/config.json
+python3 scripts/setup.py --set ~/some/notes
 ```
 
-Don't point it at notes you care about while testing writes.
+Don't point it at notes you care about while testing writes. `DONT_FORGET_HOME` moves
+the config, index and logs somewhere else, which is how you keep a throwaway vault
+without disturbing your real one:
+
+```bash
+DONT_FORGET_HOME=/tmp/df-test python3 scripts/setup.py --set /tmp/scratch-vault
+```
 
 ## What gets a PR sent back
 

@@ -38,14 +38,11 @@ claude plugin marketplace add szarkans/dont-forget
 claude plugin install dont-forget@dont-forget
 ```
 
-**2. 告诉它笔记在哪。** 这一步是必须的 —— 不做的话什么都跑不起来：
+**2. 告诉它笔记在哪。** 运行 `/dont-forget:setup`。它会读取 Obsidian 自己的库列表，
+把找到的结果列给你，你选定之后它写入配置 —— 不用手敲路径。
 
-```bash
-mkdir -p ~/.dont-forget
-echo '{"vault": "~/你的/笔记/路径"}' > ~/.dont-forget/config.json
-```
-
-任何装着 `.md` 文件的文件夹都行。不需要 Obsidian —— 它就是个文件夹。
+任何装着 `.md` 文件的文件夹都行。不需要 Obsidian —— 它就是个文件夹；要是什么都没找到，
+setup 会接受你给出的路径。
 
 **3. 重启 Claude Code。** 索引会在第一次搜索时自动建立，之后自动保持更新。
 没有需要你手动跑的东西。
@@ -72,6 +69,9 @@ echo '{"vault": "~/你的/笔记/路径"}' > ~/.dont-forget/config.json
 哪些事实和承诺压根没进记忆。
 
 `/dont-forget:checkup` —— **笔记库**的健康检查：把它提交到 git，并报告索引实际看到了什么。
+
+`/dont-forget:setup` —— 把插件指向你的笔记，之后也可以改指到别的文件夹。
+它自己去找笔记库，而不是让你敲路径。
 
 `/dont-forget:feedback` —— 记录已证实的检索失败与命中，让搜索按证据改进，而不是凭感觉。
 

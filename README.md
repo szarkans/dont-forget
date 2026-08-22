@@ -39,14 +39,11 @@ claude plugin marketplace add szarkans/dont-forget
 claude plugin install dont-forget@dont-forget
 ```
 
-**2. Point it at your vault.** This step is required — nothing works without it:
+**2. Point it at your notes.** Run `/dont-forget:setup`. It reads Obsidian's own vault
+list, shows you what it found, and writes the config once you pick — no path to type.
 
-```bash
-mkdir -p ~/.dont-forget
-echo '{"vault": "~/path/to/your/notes"}' > ~/.dont-forget/config.json
-```
-
-Any folder of `.md` files works. Obsidian is not required — it's just a folder.
+Any folder of `.md` files works. Obsidian is not required — it's just a folder, and
+setup takes a path you name if it finds nothing.
 
 **3. Restart Claude Code.** The index builds itself on the first search and keeps
 itself fresh after that. Nothing to run by hand.
@@ -75,6 +72,9 @@ you claimed was done, which facts and commitments never made it into memory.
 
 `/dont-forget:checkup` — health of your **vault**: commits it to git and reports what
 the index actually sees.
+
+`/dont-forget:setup` — points the plugin at your notes, or moves it to a different
+folder later. Finds your vaults for you instead of asking you to type a path.
 
 `/dont-forget:feedback` — logs proven search failures and wins, so the search can be
 fixed against evidence instead of vibes.

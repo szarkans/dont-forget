@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.4.0 — 2026-08-22
+
+Setup you don't have to do by hand, and a plugin that stops assuming your notes are
+written in English or Russian.
+
+- **`/dont-forget:setup`.** The vault is found for you: the plugin reads Obsidian's own
+  registry — the same list its vault switcher shows — on Linux, macOS, Flatpak, Snap,
+  Windows and WSL, translating `C:\...` to `/mnt/c/...` where the app runs on the Windows
+  side of WSL. No registry means a bounded walk of the home directory for folders holding
+  `.obsidian`. Setup never picks silently when more than one vault is found. Typing a
+  path by hand still works and is still the fallback when nothing is detected.
+- **Errors name the fix.** A missing or broken config used to surface as a
+  `FileNotFoundError` about a file the user had never created, including in the
+  session-start digest, which was the first thing a new install ever printed. Every
+  entry point now says what to run. A configured vault that has since been moved or
+  deleted is reported as such instead of indexing nothing.
+- **The session digest no longer matches heading names.** It listed the headings that
+  hold unfinished work in English and Russian, which lost threads two ways: headings
+  nobody had thought to list, and SQLite's `lower()` folding ASCII only — which made
+  every Cyrillic entry in that list dead from the day it was added. An unticked `- [ ]`
+  in a session note is now an open thread wherever it sits. Measured on a live vault:
+  the old list found 359 tails, the boxes find 375, and all 16 it had been dropping
+  were genuine.
+- **Prefix search is no longer Cyrillic-only.** The wildcard that lets a word match its
+  own inflections was handed to Cyrillic alone, on the reasoning that the index's porter
+  stemmer covers English. It covers English and nothing else, so every other language got
+  neither: a German vault answered `Textur` with zero fragments while `Texturen` sat in
+  it, and now answers with three. `widen()` already cuts each prefix back using the
+  vault's own word counts, so this needs no per-language list. Benchmarked on the tune
+  split before and after: hit@1 0.448, hit@3 0.517, hit@5 0.517, false_abstain 0.000,
+  trap_abstain 0.100 — identical. It is not a no-op, though: 7 of 39 queries changed
+  which notes they returned, without changing whether the labelled note was among them.
+  The final split is locked by the pre-registered protocol and was not re-run.
+- **`DONT_FORGET_HOME`** moves the config, index and logs off `~/.dont-forget`, so a
+  second vault or a test run no longer has to fake `$HOME`.
+- Sixth self-check added (`selftest_setup.py`), covering discovery, the Windows path
+  translation, every config failure message, and that setup preserves any key a user
+  added to `config.json` by hand.
+
 ## 0.3.2 — 2026-08-22
 
 - Changelog is now written in English. The plugin is open source, so its history
