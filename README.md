@@ -91,8 +91,6 @@ descriptions, they're a pain in the ass to read.
 
 Plain and to the point. For the rest of the details, ask your agent.
 
-Want to change something? [CONTRIBUTING.md](CONTRIBUTING.md).
-
 ## License
 
 MIT
