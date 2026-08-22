@@ -3,12 +3,13 @@
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from index import _split_large, extract_links, parse_frontmatter
+from index import _split_large, build, extract_links, parse_frontmatter, schema_stale
 from common import connect_ro
 from search import apply_budget, fts_query, widen
 
@@ -283,5 +284,80 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(bulky["fragments"][0]["text"].encode()) > 8000 * 0.6, "fixture is not large enough"
     assert bulky["coverage"]["returned_by_link"] > 0, bulky["coverage"]
     assert any(f["found_by"] == "text" for f in bulky["fragments"]), bulky["fragments"]
+
+# A link written by alias opens in Obsidian, so an index that calls it broken is wrong
+# twice: the health report cries wolf, and the graph lane never walks that edge.
+def resolved_links(db_path: Path) -> dict[str, str | None]:
+    con = connect_ro(db_path)
+    paths = {row[0]: row[1] for row in con.execute("SELECT id,path FROM notes")}
+    links = {name: paths.get(dst) for name, dst in
+             con.execute("SELECT dst_name,dst_note_id_or_null FROM links")}
+    con.close()
+    return links
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    (vault / "widget-moc.md").write_text("---\naliases: [Widget, Gadget]\n---\n\n# Widgets\n\nbody\n")
+    (vault / "twin-a.md").write_text("---\naliases: [Twin]\n---\n\nfirst\n")
+    (vault / "twin-b.md").write_text("---\naliases: [Twin]\n---\n\nsecond\n")
+    (vault / "overlap.md").write_text("---\ntitle: Overlap\n---\n\nthe real one\n")
+    (vault / "rival.md").write_text("---\naliases: [Overlap]\n---\n\nthe pretender\n")
+    (vault / "linker.md").write_text("[[Widget]] [[gadget]] [[widget-moc.md]] [[Twin]] [[Overlap]] [[widget-moc]] [[Nobody]]\n")
+    db = home / "alias.db"
+    build(vault, db)
+
+    links = resolved_links(db)
+    assert links["Widget"] == "widget-moc.md", links
+    # Obsidian ignores case in a link, so the index must too.
+    assert links["gadget"] == "widget-moc.md", links
+    # Two notes answer to "Twin": inventing a link here is worse than leaving none.
+    assert links["Twin"] is None, links
+    # A title outranks another note's alias, whatever order the notes were walked in.
+    assert links["Overlap"] == "overlap.md", links
+    assert links["widget-moc"] == "widget-moc.md", links
+    assert links["Nobody"] is None, links
+    # Obsidian opens [[Note.md]] as readily as [[Note]], and a title that ends in a word
+    # like CLAUDE gets linked to with the extension attached in real vaults.
+    assert links["widget-moc.md"] == "widget-moc.md", links
+
+    # Story 9: an alias taken out of a note must untie its links on the next pass, not
+    # keep yesterday's picture.
+    (vault / "widget-moc.md").write_text("---\naliases: [Gadget]\n---\n\n# Widgets\n\nbody\n")
+    build(vault, db)
+    links = resolved_links(db)
+    assert links["Widget"] is None, links
+    assert links["gadget"] == "widget-moc.md", links
+
+    # An index built before this change has no aliases column, and a build against it
+    # would either crash or quietly resolve nothing — same failure the tokenizer check
+    # exists to prevent, so it is caught the same way.
+    stale = home / "stale.db"
+    con = sqlite3.connect(stale)
+    con.executescript(
+        "CREATE TABLE notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,"
+        " title TEXT NOT NULL, type TEXT, project TEXT, date TEXT, reviewed TEXT,"
+        " mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);")
+    con.commit()
+    con.close()
+    assert schema_stale(stale), "an index without the aliases column must force a rebuild"
+    build(vault, stale)
+    assert resolved_links(stale)["gadget"] == "widget-moc.md"
+
+# A vault with no aliases anywhere must resolve exactly as it did before.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    (vault / "target.md").write_text("---\ntitle: Target\n---\n\nbody\n")
+    (vault / "source.md").write_text("[[Target]] [[target]] [[Missing]]\n")
+    db = home / "plain.db"
+    build(vault, db)
+    plain = resolved_links(db)
+    assert plain["Target"] == "target.md" and plain["target"] == "target.md", plain
+    assert plain["Missing"] is None, plain
+    assert schema_stale(db) is False
 
 print("ok")

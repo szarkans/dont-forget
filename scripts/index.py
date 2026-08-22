@@ -143,7 +143,7 @@ def make_chunks(title: str, body: str) -> list[tuple[str, str, int]]:
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,
- title TEXT NOT NULL, type TEXT, project TEXT, date TEXT, reviewed TEXT,
+ title TEXT NOT NULL, type TEXT, project TEXT, date TEXT, reviewed TEXT, aliases TEXT,
  mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
  heading_path TEXT NOT NULL, body TEXT NOT NULL, ord INTEGER NOT NULL);
@@ -159,30 +159,44 @@ def _scalar(value) -> str:
     return json.dumps(value, ensure_ascii=False) if isinstance(value, list) else str(value or "")
 
 
+def _unscalar(raw) -> list[str]:
+    """Read back what _scalar wrote: a JSON list, or a lone value written as itself."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return [str(raw)]
+    names = value if isinstance(value, list) else [raw]
+    return [str(name).strip() for name in names if str(name).strip()]
+
+
 TOKENIZER = "porter unicode61 remove_diacritics 2"
 
 
-def tokenizer_changed(db_path: Path) -> bool:
-    """An existing index keeps its own tokenizer, so a change here must force a rebuild.
+def schema_stale(db_path: Path) -> bool:
+    """An existing index keeps its own schema, so a change here must force a rebuild.
 
-    Without this an upgrade looks fine and quietly searches by the old rules.
+    Without this an upgrade looks fine and quietly searches by the old rules — or
+    resolves links without the aliases it was never given a column for.
     """
     if not db_path.exists():
         return False
     try:
         con = connect_ro(db_path)
         row = con.execute("SELECT sql FROM sqlite_master WHERE name='chunks_fts'").fetchone()
+        columns = {info[1] for info in con.execute("PRAGMA table_info(notes)")}
         con.close()
     except sqlite3.Error:
         return True
-    return not row or TOKENIZER not in row[0]
+    return not row or TOKENIZER not in row[0] or "aliases" not in columns
 
 
 def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dict:
     started = time.perf_counter()
     vault = vault.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    if (rebuild or tokenizer_changed(db_path)) and db_path.exists():
+    if (rebuild or schema_stale(db_path)) and db_path.exists():
         db_path.unlink()
     con = sqlite3.connect(db_path)
     con.execute("PRAGMA foreign_keys=ON")
@@ -211,13 +225,14 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
                 con.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE note_id=?)", (note_id,))
                 con.execute("DELETE FROM chunks WHERE note_id=?", (note_id,))
                 con.execute("DELETE FROM links WHERE src_note_id=?", (note_id,))
-                con.execute("UPDATE notes SET title=?,type=?,project=?,date=?,reviewed=?,mtime=?,sha256=? WHERE id=?",
+                con.execute("UPDATE notes SET title=?,type=?,project=?,date=?,reviewed=?,aliases=?,mtime=?,sha256=? WHERE id=?",
                             (title, _scalar(meta.get("type")), _scalar(meta.get("project")), _scalar(meta.get("date")),
-                             _scalar(meta.get("reviewed")), mtime, digest, note_id))
+                             _scalar(meta.get("reviewed")), _scalar(meta.get("aliases")), mtime, digest, note_id))
             else:
-                cur = con.execute("INSERT INTO notes(path,title,type,project,date,reviewed,mtime,sha256) VALUES(?,?,?,?,?,?,?,?)",
+                cur = con.execute("INSERT INTO notes(path,title,type,project,date,reviewed,aliases,mtime,sha256) VALUES(?,?,?,?,?,?,?,?,?)",
                                   (rel, title, _scalar(meta.get("type")), _scalar(meta.get("project")),
-                                   _scalar(meta.get("date")), _scalar(meta.get("reviewed")), mtime, digest))
+                                   _scalar(meta.get("date")), _scalar(meta.get("reviewed")),
+                                   _scalar(meta.get("aliases")), mtime, digest))
                 note_id = cur.lastrowid
             for heading, chunk_body, ordinal in make_chunks(title, body):
                 cur = con.execute("INSERT INTO chunks(note_id,heading_path,body,ord) VALUES(?,?,?,?)",
@@ -226,16 +241,29 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
             con.executemany("INSERT INTO links(src_note_id,dst_name,dst_note_id_or_null) VALUES(?,?,NULL)",
                             ((note_id, target) for target in extract_links(body)))
             reindexed += 1
-        aliases: dict[str, int | None] = {}
-        for note_id, path, title in con.execute("SELECT id,path,title FROM notes"):
-            for name in (title, Path(path).stem, path.removesuffix(".md")):
-                key = name.casefold()
-                if key not in aliases:
-                    aliases[key] = note_id
-                elif aliases[key] != note_id:
-                    aliases[key] = None
+        names: dict[str, int | None] = {}
+        alias_names: dict[str, int | None] = {}
+
+        def claim(bucket: dict[str, int | None], name: str, note_id: int) -> None:
+            key = name.casefold()
+            if key not in bucket:
+                bucket[key] = note_id
+            elif bucket[key] != note_id:
+                # A name two notes answer to is a name this index refuses to guess at.
+                bucket[key] = None
+
+        for note_id, path, title, raw_aliases in con.execute("SELECT id,path,title,aliases FROM notes"):
+            # The extension counts as part of a name: Obsidian opens [[Note.md]] too, and
+            # a note whose own title ends in a word like CLAUDE is linked to exactly that way.
+            for name in (title, Path(path).stem, path.removesuffix(".md"), Path(path).name, path):
+                claim(names, name, note_id)
+            for name in _unscalar(raw_aliases):
+                claim(alias_names, name, note_id)
+        # Aliases only fill gaps: a real title always outranks someone else's nickname.
+        for key, target in alias_names.items():
+            names.setdefault(key, target)
         for rowid, name in con.execute("SELECT rowid,dst_name FROM links"):
-            target = aliases.get(name.casefold())
+            target = names.get(name.casefold())
             con.execute("UPDATE links SET dst_note_id_or_null=? WHERE rowid=?", (target, rowid))
     counts = [con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("notes", "chunks", "links")]
     con.close()
