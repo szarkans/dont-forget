@@ -12,10 +12,19 @@ within a byte budget, so do not duplicate that logic manually.
 
 ## Search
 
-From the plugin root, run `python3 scripts/search.py "<question>" --raw "<the user's message that triggered this recall, verbatim>"`. Pass the user's
-entire query unchanged as a single argument. Do not invent keywords, split the
-question into words, or run separate searches: that distorts ranking and coverage.
---raw is the shadow log that lets the user later check what recall was asked and what it returned; always pass it.
+From the plugin root, run `python3 scripts/search.py "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
+call, never split the question into several searches: that distorts ranking and coverage.
+
+The query argument is a search query you compose, not the user's sentence. Pick 3-8
+content words: keep ticket ids, project and product names, and technical terms exactly
+as written; drop greetings, filler and meta-words ("напомни", "что там по"). When the
+message has no topic words at all, take the subject from context you already have — the
+project you are working in, the branch, what recent memory (session digests) says was
+happening — and say in the answer that you did so. Never invent ticket numbers or names
+that neither the message nor your context contains.
+
+--raw is the shadow log that lets the user later check what recall was asked and what
+it actually returned; always pass the message there verbatim, untouched by the rewrite.
 
 - [ ] `search.py` keeps the index fresh automatically; do nothing manually. If it
   reports an index error, pass that error to the user unchanged.
