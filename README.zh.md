@@ -85,7 +85,7 @@ echo '{"vault": "~/你的/笔记/路径"}' > ~/.dont-forget/config.json
 因为是我这个人类写的。我受够了那种 b2b-ai-saas-agentic-loop-skills 式的描述，
 读起来太折磨人了。
 
-大白话最好使。
+大白话，讲事实。其余细节问你的智能体去。
 
 ## 许可证
 

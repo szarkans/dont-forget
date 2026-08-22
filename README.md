@@ -89,7 +89,7 @@ the unfinished checkboxes from your session notes. No command needed.
 Because it's written by me, a human. I'm tired of b2b-ai-saas-agentic-loop-skills
 descriptions, they're a pain in the ass to read.
 
-Simple words prevail.
+Plain and to the point. For the rest of the details, ask your agent.
 
 ## License
 
