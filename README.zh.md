@@ -84,7 +84,10 @@ setup 会接受你给出的路径。
 智能体趁还有余地时把这次会话存好，而不是等窗口已经用完。上下文只是变得太长、
 回答开始变差时，它也会更早提醒一次，并建议开一个新会话 —— 只是建议，它从不自己清空。
 
-不想要：在 `~/.dont-forget/config.json` 里写 `"autocompact_nudge": false`。
+默认情况下它只是*建议*并等待 —— 保存会写笔记、会提交你的库，而这个钩子是按你没要求过的
+时机触发的，所以由你来定。想让它直接动手：在 `~/.dont-forget/config.json` 里写
+`"autocompact_autosave": true`。什么都不想要：在同一个文件里写
+`"autocompact_nudge": false`。
 
 ## 为什么 readme 写成这样
 

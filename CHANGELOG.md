@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 — 2026-08-22
+
+- The autocompact nudge now *offers* by default instead of instructing. Saving a session
+  writes notes and commits a vault, and the hook fires on a schedule the user never asked
+  for, so the decision goes back to them: the agent is told to explain what is about to
+  happen and to wait for an answer. Two keys govern it now — `autocompact_nudge` (speak at
+  all, default true) and `autocompact_autosave` (act without asking, default false). Set
+  the second one to true if you would rather the close-out simply happened.
+
 ## 0.5.0 — 2026-08-22
 
 - A Stop hook now speaks up before Claude Code auto-compacts, while the raw

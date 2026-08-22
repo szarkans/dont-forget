@@ -192,6 +192,19 @@ def check_end_to_end(tmp: Path) -> None:
     assert first["decision"] == "block", first
     assert "/dont-forget:" in first["reason"], first
     assert "ignore this message" in first["reason"], first
+    # Default: the agent offers and waits. Saving writes notes and commits a vault, and
+    # the hook fires on a schedule the user never chose — so the decision stays theirs.
+    assert "offer to run" in first["reason"], first
+    assert "Do not run it unless they agree" in first["reason"], first
+
+    # Opted in: the same mark becomes an instruction instead of an offer.
+    config.write_text(json.dumps({"vault": str(vault), "autocompact_autosave": True}),
+                      encoding="utf-8")
+    acting = json.loads(run_hook(home, config_dir, {**payload, "session_id": "s-act"}))
+    assert "Run /dont-forget:" in acting["reason"] and " now" in acting["reason"], acting
+    assert "offer to run" not in acting["reason"], acting
+    assert "unless they agree" not in acting["reason"], acting
+    config.write_text(json.dumps({"vault": str(vault)}), encoding="utf-8")
 
     # Same session, same mark: silence. This is what stops a stop-loop.
     assert run_hook(home, config_dir, payload) == ""

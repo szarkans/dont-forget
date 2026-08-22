@@ -90,7 +90,10 @@ room to do it properly, not once the window is already gone. It also says someth
 much earlier, when the context has simply grown long enough that answers get worse,
 and suggests starting fresh — suggests, it never clears anything itself.
 
-Don't want any of that: `"autocompact_nudge": false` in `~/.dont-forget/config.json`.
+By default it *offers* and waits — saving writes notes and commits your vault, and the
+hook fires on a schedule you never asked for, so the call stays yours. Want it to just
+get on with it: `"autocompact_autosave": true` in `~/.dont-forget/config.json`.
+Don't want any of it at all: `"autocompact_nudge": false` in the same file.
 
 ## Why is your readme written like that?
 

@@ -64,17 +64,24 @@ def read_json(path: Path):
         return None
 
 
-def enabled_in_config() -> bool:
-    """Opt-out, not opt-in.
+def config_flags() -> tuple[bool, bool]:
+    """(speak at all, act without asking).
 
-    A nudge that ships switched off is a nudge nobody has. But a hook that blocks Stop
-    is intrusive enough to deserve a documented off switch, so the key exists.
-    A missing config means the plugin was never set up and there is nothing to save to.
+    The first is opt-out: a nudge that ships switched off is a nudge nobody has. But a
+    hook that blocks Stop is intrusive enough to deserve a documented off switch.
+
+    The second is opt-in, and deliberately so. Saving a session writes files and commits
+    a vault, and the hook fires on a schedule the user never asked for — so by default it
+    hands them the decision instead of taking it. Whoever wants the close-out to just
+    happen turns it on and stops being asked.
+
+    A missing config means the plugin was never set up and there is nothing to save into.
     """
     config = read_json(CONFIG_PATH)
     if not isinstance(config, dict) or not config.get("vault"):
-        return False
-    return config.get("autocompact_nudge", True) is not False
+        return False, False
+    return (config.get("autocompact_nudge", True) is not False,
+            config.get("autocompact_autosave", False) is True)
 
 
 def tail_lines(path: Path, chunk: int = 1 << 16):
@@ -241,26 +248,40 @@ def marks(window: int, compact_marks: bool) -> list[tuple[str, int]]:
                   key=lambda mark: mark[1])
 
 
-def message(name: str, used: int, window: int) -> str:
+def message(name: str, used: int, window: int, autosave: bool) -> str:
+    """What the agent is told. Whether that is an instruction or an offer is the user's
+    setting, not this hook's opinion: the hook fires on a schedule nobody asked for, and
+    running the close-out writes notes and commits a vault."""
     thousands = lambda value: f"~{round(value / 1000)}k"
     tail = (" If this session was already saved since the last compaction, ignore this "
             "message and stop again.")
+
+    def call(command: str, what: str) -> str:
+        if autosave:
+            return f"Run {command} now — it {what}."
+        return (f"Tell the user what is about to happen and offer to run {command} — it "
+                f"{what}. Do not run it unless they agree.")
+
     if name.startswith("rot-"):
-        return (f"Context has passed {thousands(used)} tokens. Answer quality degrades as "
-                f"a context grows long, and saving does not undo that — only a fresh "
-                f"session does. Run /dont-forget:review --full to store what this session "
-                f"learned, then tell the user a new session would now serve them better "
-                f"and let them decide; never clear on your own." + tail)
+        return (f"Context has passed {thousands(used)} tokens. Answer quality degrades as a "
+                f"context grows long, and saving does not undo that — only a fresh session "
+                f"does. " + call("/dont-forget:review --full",
+                                 "stores what this session learned") +
+                f" Either way, tell the user a new session would now serve them better and "
+                f"let them decide; never clear on your own." + tail)
     point = thousands(max(1, window - COMPACT_RESERVE))
     if name == "compact-critical":
         return (f"Context is {thousands(used)} and Claude Code auto-compacts at {point}, "
-                f"which drops the raw conversation for a summary. Little room is left, so "
-                f"run /dont-forget:session now — it keeps the session note and its open "
-                f"threads, the cheapest thing that survives." + tail)
+                f"which drops the raw conversation for a summary. Little room is left. " +
+                call("/dont-forget:session",
+                     "keeps the session note and its open threads, the cheapest thing "
+                     "that survives") + tail)
     return (f"Context is {thousands(used)} of a {thousands(window)} window; Claude Code "
             f"auto-compacts at {point} and the raw conversation is replaced by a summary. "
-            f"There is still room to do this properly: run /dont-forget:review --full — it "
-            f"audits what went unsaved, stores the facts, writes the session note." + tail)
+            f"There is still room to do this properly. " +
+            call("/dont-forget:review --full",
+                 "audits what went unsaved, stores the facts, writes the session note") +
+            tail)
 
 
 def load_state() -> dict:
@@ -331,7 +352,8 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict) or payload.get("stop_hook_active"):
         return 0
-    if not enabled_in_config():
+    enabled, autosave = config_flags()
+    if not enabled:
         return 0
 
     transcript = payload.get("transcript_path")
@@ -366,7 +388,7 @@ def main() -> int:
     # so an unwritable state file means staying quiet.
     if name is None or not written:
         return 0
-    print(json.dumps({"decision": "block", "reason": message(name, used, window)},
+    print(json.dumps({"decision": "block", "reason": message(name, used, window, autosave)},
                      ensure_ascii=False))
     return 0
 

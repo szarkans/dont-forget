@@ -10,7 +10,7 @@
     {
       "name": "dont-forget",
       "description": "I'm with you in the dark. Long-term memory for Claude Code over a folder of Markdown notes: recall on session start, full-text plus link-graph search, atomic fact capture, session continuity.",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "source": "./",
       "category": "productivity",
       "keywords": ["memory", "obsidian", "zettelkasten", "recall", "second-brain", "session-notes", "knowledge-management"]
