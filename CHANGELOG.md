@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.5.0 — 2026-08-22
+
+- A Stop hook now speaks up before Claude Code auto-compacts, while the raw
+  conversation still exists to be saved. It measures from the point compaction
+  actually happens — `window - 33k`, because Claude Code holds room back for its own
+  reply — and not from the window itself. That reserve is measured, not assumed:
+  `compactMetadata.preTokens` across 44 auto-compacts and three different window
+  settings (550k, 600k, 650k) put it at 29-33k every time. A mark measured from the
+  window instead sits past a threshold no session ever reaches, and never fires.
+- The window is resolved rather than guessed: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, then
+  settings, clamped to the model's own context. A transcript strips the `[1m]` suffix
+  from model ids, so the ceiling is read from `lastModelUsage` in `~/.claude.json`,
+  which keeps it and records what actually ran. Where nothing is recognised — a model
+  served over a custom API, an unfamiliar plan — a 200k guess climbs by observation,
+  since a session that outgrew a window proves the window is larger. Guessing low
+  costs one early nudge; guessing high would silence the hook forever.
+- A second scale warns at 500k and 900k tokens whatever the window allows. A long
+  context degrades answers on its own, and saving does not undo that — only a new
+  session does, which the hook suggests and never performs itself.
+- Usage is read from the end of the transcript (the figure sits in its last few lines;
+  reading forward costs tens of megabytes for one number) as input + output + cache
+  tokens. Validated against `preTokens` on 26 compactions: median difference -726
+  tokens, and low rather than high, so the hook errs towards speaking early.
+- One message per stop, each mark spends once, and everything re-arms once usage falls
+  below the lowest mark — which is how a compaction announces itself, so a second one
+  in the same session still warns.
+- Opt out with `"autocompact_nudge": false` in `config.json`. A seventh self-check
+  covers the marks, the ceiling ladder, the window chain and the hook end to end.
+
 ## 0.4.1 — 2026-08-22
 
 - The marketplace manifest was left at 0.3.2 while `plugin.json` said 0.4.0, so

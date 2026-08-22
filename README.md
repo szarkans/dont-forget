@@ -51,7 +51,7 @@ itself fresh after that. Nothing to run by hand.
 Requirements: `python3`. No pip installs, no dependencies — standard library only.
 
 > **Not `npx skills add`.** That tool copies the skill folder alone. This plugin's
-> skills call helper scripts in `scripts/` and register a session-start hook, neither
+> skills call helper scripts in `scripts/` and register hooks, neither
 > of which comes along — you'd get skills that crash on first use. Measured, not
 > guessed. Use the marketplace route above.
 
@@ -83,6 +83,14 @@ fixed against evidence instead of vibes.
 
 At the start of every session it injects your open threads from the last 7 days,
 the unfinished checkboxes from your session notes. No command needed.
+
+And it speaks up before Claude Code auto-compacts — the moment your raw conversation
+gets swapped for a summary. It asks the agent to save the session while there's still
+room to do it properly, not once the window is already gone. It also says something
+much earlier, when the context has simply grown long enough that answers get worse,
+and suggests starting fresh — suggests, it never clears anything itself.
+
+Don't want any of that: `"autocompact_nudge": false` in `~/.dont-forget/config.json`.
 
 ## Why is your readme written like that?
 
