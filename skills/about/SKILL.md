@@ -58,13 +58,23 @@ counts the whole vault, while `pool_examined` is how many of those were re-ranke
 the two are equal nothing was cut before ranking, and when `pool_examined` is smaller
 say that the tail was never examined.
 
-`weak_match: true` is the most important field. It means no single chunk in the vault
-contains even two of the meaningful words of the question — the fragments are the
-closest text, not an answer. Say that first, in the user's words, before anything else:
-the vault has nothing on this. Then you may show what came closest, clearly labelled as
-such. Never synthesise a confident answer over a weak match, and never let a weak match
-produce a conclusion the user could act on. `best_terms_matched` and `content_terms`
-give the plain numbers behind the flag.
+`weak_match: true` is the most important field. It means the vault cannot answer this:
+the closest chunk in it covers too little of what the question is about — the fragments
+are the nearest text, not an answer. Say that first, in the user's words, before
+anything else. Then you may show what came closest, clearly labelled as such. Never
+synthesise a confident answer over a weak match, and never let a weak match produce a
+conclusion the user could act on. `best_mass_share`, `best_terms_matched` and
+`content_terms` are the numbers behind the flag.
+
+`unmatched_terms` lists the words of the question the vault does not contain at all, in
+any form: the search already shortened each one looking for another grammatical form and
+found nothing. A word listed there is a hole in the answer, not a detail — whatever the
+fragments say, they do not say it about that word, and the flag above can stay off while
+the hole is exactly what was asked about. Name the missing word first, in the user's own
+words, before summarising anything, and never let neighbouring material stand in for it.
+A vault rich in the surrounding topic will otherwise answer a question it was never
+asked. The vault may simply word the subject differently, so say the word is missing,
+not that the work never happened.
 
 `returned_by_link` counts fragments reached through links rather than text; they are
 neighbours of the fragments above them and are weaker evidence. `expanded_notes` and

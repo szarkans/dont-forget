@@ -162,17 +162,61 @@ with tempfile.TemporaryDirectory() as tmp:
     assert covering["fragments"][0]["terms_matched"] == 2, covering["fragments"][0]
     assert covering["coverage"]["weak_match"] is False, covering["coverage"]
 
-    # No chunk holds both words, so the answer would be built out of strangers.
-    weak = run("alphaword gammaword")
-    assert weak["coverage"]["weak_match"] is True, weak["coverage"]
-    assert weak["coverage"]["best_terms_matched"] == 1, weak["coverage"]
-    # A weak match must not also be amplified: no neighbours of an irrelevant seed.
-    assert weak["coverage"]["returned_by_link"] == 0, weak["coverage"]
-    assert all(f["found_by"] == "text" for f in weak["fragments"]), weak["fragments"]
+    # No chunk holds both words, and this used to be enough to call the result weak.
+    # It is not: the chunk that matched holds gammaword, the rarer and more informative
+    # of the two, and covers two thirds of the query's mass. Counting words called this
+    # weak and called a chunk holding two common words an answer — exactly backwards.
+    split = run("alphaword gammaword")
+    assert split["coverage"]["best_terms_matched"] == 1, split["coverage"]
+    assert split["coverage"]["best_mass_share"] > 0.6, split["coverage"]
+    assert split["coverage"]["weak_match"] is False, split["coverage"]
+    assert split["coverage"]["unmatched_terms"] == [], split["coverage"]
 
     # Coverage must describe the whole match set, not the re-ranked pool.
-    assert weak["coverage"]["matched_chunks"] >= 11, weak["coverage"]
+    assert split["coverage"]["matched_chunks"] >= 11, split["coverage"]
     assert isinstance(covering["coverage"]["expanded_notes"], int), covering["coverage"]
+
+    # Two query words landing in one chunk is not an answer when the words the question
+    # is actually about are absent. Here the best chunk holds 2 of 4 terms but only a
+    # third of the query's idf mass, and the two it holds are the two the vault happens
+    # to own. Counting terms answers "found"; counting how much of the query's mass the
+    # best chunk covers answers "the vault does not have this". Measured on the search
+    # benchmark: on questions with no answer in the vault the term count abstained 5
+    # times out of 14, against a required 60%.
+    thin = run("alphaword betaword zebrafish quasarword")
+    assert thin["coverage"]["best_terms_matched"] == 2, thin["coverage"]
+    assert thin["coverage"]["best_mass_share"] < 0.4, thin["coverage"]
+    assert thin["coverage"]["weak_match"] is True, thin["coverage"]
+    # A weak match must not also be amplified: no neighbours of an irrelevant seed.
+    assert thin["coverage"]["returned_by_link"] == 0, thin["coverage"]
+    assert all(f["found_by"] == "text" for f in thin["fragments"]), thin["fragments"]
+
+    # A word the vault does not contain at all is invisible to the mass share: the two
+    # words the vault does own carry the best chunk past the threshold on their own, and
+    # the question comes back answered. Measured live: the best chunk covered 60% of the
+    # mass while the word the question turned on had zero hits anywhere, and three of
+    # three agent runs answered confidently, one of them inventing a pull request. The
+    # word has to be reported by name — the numbers beside it were not enough — and it
+    # must survive widening, which reports the word the user typed, not the stem it was
+    # cut to. The flag stays off: refusing here was measured and cost more than it caught.
+    qualifier = run("alphaword betaword quasarword")
+    assert qualifier["coverage"]["best_mass_share"] > 0.4, qualifier["coverage"]
+    assert qualifier["coverage"]["unmatched_terms"] == ["quasarword"], qualifier["coverage"]
+    assert qualifier["coverage"]["weak_match"] is False, qualifier["coverage"]
+
+    # A one-word question the vault has no word for is the plainest "not found" there is,
+    # and it used to be the one case that never raised the flag: the rule only ran when
+    # the query had more than one meaningful word, so a single miss returned no fragments
+    # and an unset weak_match — an empty answer the skill was not told to distrust.
+    lone = run("quasarword")
+    assert lone["coverage"]["content_terms"] == 1, lone["coverage"]
+    assert lone["coverage"]["returned"] == 0, lone["coverage"]
+    assert lone["coverage"]["weak_match"] is True, lone["coverage"]
+
+    # ...but a single word the vault does have is an answer, not a refusal.
+    found = run("gammaword")
+    assert found["coverage"]["returned"] > 0, found["coverage"]
+    assert found["coverage"]["weak_match"] is False, found["coverage"]
 
 
 # A word typed in one grammatical form does not prefix-match the same word written in
@@ -201,14 +245,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert inflected["fragments"][0]["path"].startswith("texture"), inflected["fragments"]
 
     con = connect_ro(db)
-    assert widen(con, ['"текстурам"*']) == ['"текстур"*'], widen(con, ['"текстурам"*'])
+    assert list(widen(con, ['"текстурам"*'])) == ['"текстур"*'], widen(con, ['"текстурам"*'])
     # A rare precise word is never widened away: no shorter prefix buys anything, so
     # widening must not turn a term that pinpoints one note into a vague one.
-    assert widen(con, ['"щебетунчик"*']) == ['"щебетунчик"*'], widen(con, ['"щебетунчик"*'])
+    assert list(widen(con, ['"щебетунчик"*'])) == ['"щебетунчик"*'], widen(con, ['"щебетунчик"*'])
     # A misspelling has no forms in the vault, and shrinking it until something matches
     # is how a search for "ресруспаке" started answering with "рестарт": a guess at a
     # word form is allowed to give up half the word, no more.
-    assert widen(con, ['"тексутрам"*']) == ['"тексу"*'], widen(con, ['"тексутрам"*'])
+    assert list(widen(con, ['"тексутрам"*'])) == ['"тексу"*'], widen(con, ['"тексутрам"*'])
     con.close()
 
     # Function words used to decide the ranking: each is worth little, but a question

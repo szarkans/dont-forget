@@ -34,6 +34,15 @@ COMMON_FLOOR = 20
 PREFIX_GROWTH = 1.5
 # Never cut a prefix below this: shorter than this it stops being a word.
 MIN_STEM = 3
+# How much of the query's idf mass the best chunk must cover before the result counts as
+# an answer at all. Below it the search says the vault has nothing, whatever it returns.
+# Calibrated on the tune half of the search benchmark, on the rewritten query the about
+# skill actually sends: 0.4 refuses 8 of the 10 questions the vault cannot answer while
+# refusing 2 of the 29 it can. It is where the sweep turns, not the only value that
+# passes the protocol gates: 0.35 refuses 6 and 0.4 refuses 8, and above 0.4 nothing more
+# is caught until 0.6 while the false refusals climb 2, 4, 5, 8. So 0.4 buys the last
+# refusal that is free.
+WEAK_COVERAGE = 0.4
 
 
 def parse_terms(query: str) -> list[str]:
@@ -62,7 +71,7 @@ def _hits(con: sqlite3.Connection, term: str) -> int:
     return con.execute("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?", (term,)).fetchone()[0]
 
 
-def widen(con: sqlite3.Connection, terms: list[str]) -> list[str]:
+def widen(con: sqlite3.Connection, terms: list[str]) -> dict[str, str]:
     """Cut each prefix term back to the stem the vault itself shows, not one from a list.
 
     A word typed in one grammatical form does not prefix-match the same word written in
@@ -72,9 +81,13 @@ def widen(con: sqlite3.Connection, terms: list[str]) -> list[str]:
     prefix stops being productive. It needs no stemmer and knows no language: the index
     is the dictionary. A word already sitting on plenty of chunks is left alone, so a
     rare precise term is never diluted.
+
+    Each widened term keeps the word it came from, because a term that matched nothing
+    is reported to the user and "ролл" is not what they asked about.
     """
-    widened: list[str] = []
+    widened: dict[str, str] = {}
     for term in terms:
+        origin = term.strip('*').strip('"').replace('""', '"')
         if term.endswith('*'):
             word = term[1:-2]
             count = _hits(con, term)
@@ -91,8 +104,7 @@ def widen(con: sqlite3.Connection, terms: list[str]) -> list[str]:
                     break
                 word, count = word[:cut], wider
             term = f'"{word}"*'
-        if term not in widened:
-            widened.append(term)
+        widened.setdefault(term, origin)
     return widened
 
 
@@ -187,7 +199,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     matched_content: Counter[int] = Counter()
     total_chunks = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
     common_above = max(total_chunks * COMMON_ABOVE, COMMON_FLOOR)
-    content = [term for term in terms if len(hits[term]) <= common_above] or terms
+    content = [term for term in terms if len(hits[term]) <= common_above] or list(terms)
     # Only informative words move the ranking. A function word matches almost anywhere,
     # so six of them used to outweigh the two words the question was actually about —
     # and widening makes this catch them: a question word shortened to its stem lands in
@@ -199,10 +211,26 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         for chunk_id in hits[term]:
             mass[chunk_id] += weights[term]
             matched_content[chunk_id] += 1
-    # Weak means no single chunk holds even two of the query's meaningful words. That is
-    # a fact about the vault, not a score: without it the top hit is whatever rare word
-    # happened to appear, and the answer gets synthesised from strangers.
-    weak = len(content) > 1 and max(matched_content.values(), default=0) < 2
+    # Counting matched words, as this used to, calls a chunk an answer whenever any two
+    # query words land in it — including the two the vault happens to own while the
+    # subject of the question is absent. Weighing them by rarity instead keeps a chunk
+    # holding two common words and none of the rare ones weak. No floor on query length
+    # either: a one-word question the vault has no word for used to come back empty with
+    # the flag unset, which is the plainest "not found" there is going unreported.
+    query_mass = sum(weights[term] for term in content)
+    best_mass = max(mass.values(), default=0.0)
+    mass_share = best_mass / query_mass if query_mass else 0.0
+    weak = mass_share < WEAK_COVERAGE
+    # A word the vault does not contain at all stays invisible to the share, because the
+    # words it does own carry the best chunk past the threshold by themselves. Naming the
+    # word is enough: given only the numbers, three agent runs out of three answered a
+    # question the vault had never been asked; given the word, three out of three led with
+    # its absence. Refusing outright was measured and rejected — on the tune split it
+    # caught no extra unanswerable question and cost two answerable ones, both where the
+    # vault simply words the subject differently ("cashiers" against a vault saying
+    # "кассир"). widen() has already cut each word to half its length looking for a form
+    # the vault knows, so no hits here means the vault holds nothing starting with even that.
+    unmatched = [origin for term, origin in terms.items() if term in content and not hits[term]]
 
     rows = con.execute("""SELECT c.id,c.note_id,n.path,c.heading_path,c.body,bm25(chunks_fts) AS rank
         FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
@@ -240,7 +268,9 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         "returned_by_link": len(kept_links),
         "dropped_by_budget": len(text) + len(links) - len(kept),
         "query_terms": len(terms), "content_terms": len(content),
-        "best_terms_matched": max(matched_content.values(), default=0), "weak_match": weak,
+        "best_terms_matched": max(matched_content.values(), default=0),
+        "best_mass_share": math.floor(mass_share * 1000) / 1000,
+        "unmatched_terms": unmatched, "weak_match": weak,
         "bytes_used": _size(kept), "budget_bytes": budget,
         "skipped_hubs": skipped, "expanded_notes": len(seeds) - len(skipped),
         "graph_neighbor_notes": neighbour_notes}}
