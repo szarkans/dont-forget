@@ -352,6 +352,12 @@ def main() -> int:
     already = state.get(session)
     already = already if isinstance(already, list) else []
     name, spent = decide(used, window, already, compact_marks)
+    # Re-insert rather than assign: the trim in save_state keeps the last STATE_KEEP keys
+    # by insertion order, and updating a key in place does not move it. Without this a
+    # long session is evicted by twenty short ones and every mark speaks a second time.
+    # ponytail: last writer wins between concurrent sessions — costs at most one repeated
+    # message, so no lock; revisit if that ever costs more than the lock would.
+    state.pop(session, None)
     state[session] = spent
     written = save_state(state)
     log(used, window, name or "none")

@@ -221,6 +221,15 @@ def check_end_to_end(tmp: Path) -> None:
     assert (home / "context-guard.log").is_file()
     assert (home / "context-guard.json").is_file()
 
+    # A long session must survive the state trim. The file keeps the last STATE_KEEP keys
+    # by insertion order, and a session that keeps stopping only ever *updates* its key —
+    # which does not move it — so without a re-insert it is evicted by newer sessions and
+    # every mark it already spent speaks again.
+    for index in range(guard.STATE_KEEP + 5):
+        run_hook(home, config_dir, {**payload, "session_id": f"short-{index}",
+                                    "transcript_path": str(calm)})
+        assert run_hook(home, config_dir, payload) == "", "session s1 lost its record"
+
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as raw:
