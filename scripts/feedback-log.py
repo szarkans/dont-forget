@@ -44,8 +44,14 @@ def main():
     args.file.parent.mkdir(parents=True, exist_ok=True)
     with args.file.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record, ensure_ascii=False) + "\n")
-    misses = sum(1 for line in args.file.read_text(encoding="utf-8").splitlines()
-                 if line.strip() and json.loads(line).get("verdict") == "proven-miss")
+    misses = 0
+    for line in args.file.read_text(encoding="utf-8").splitlines():
+        try:
+            verdict = json.loads(line)["verdict"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if verdict == "proven-miss":
+            misses += 1
     result = {"logged": record["verdict"], "proven_misses": misses}
     if misses >= MISS_TRIGGER:
         result["trigger"] = (f"{misses} proven misses recorded: full-text search is not enough. "

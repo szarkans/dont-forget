@@ -11,12 +11,17 @@ SCRIPT = Path(__file__).with_name("feedback-log.py")
 
 with tempfile.TemporaryDirectory() as tmp:
     journal = Path(tmp) / "nested" / "feedback.jsonl"
+    journal.parent.mkdir(parents=True)
+    journal.write_text("garbage not json\n", encoding="utf-8")
     event = {"verdict": "saved-work", "query": "release rule", "notes": ["rules/release.md"], "note": "Avoided repeating the investigation."}
-    subprocess.run(
+    logged = subprocess.run(
         ["python3", str(SCRIPT), "--file", str(journal)],
-        input=json.dumps(event), text=True, check=True,
+        input=json.dumps(event), text=True, capture_output=True, check=True,
     )
-    record = json.loads(journal.read_text(encoding="utf-8"))
+    assert json.loads(logged.stdout)["proven_misses"] == 0
+    lines = journal.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "garbage not json"
+    record = json.loads(lines[1])
     assert {key: record[key] for key in event} == event
     assert datetime.fromisoformat(record["ts"]).utcoffset().total_seconds() == 0
 
@@ -37,6 +42,6 @@ with tempfile.TemporaryDirectory() as tmp:
         text=True, capture_output=True,
     )
     assert bad.returncode != 0
-    assert len(journal.read_text(encoding="utf-8").splitlines()) == 4
+    assert len(journal.read_text(encoding="utf-8").splitlines()) == 5
 
 print("ok")
