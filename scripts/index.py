@@ -211,10 +211,14 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
             con.execute("DELETE FROM notes WHERE path=?", (rel,))
         for path in files:
             rel = path.relative_to(vault).as_posix()
+            known_note = known.get(rel)
+            if known_note is not None and known_note[0] == path.stat().st_mtime_ns:
+                continue
             raw = path.read_bytes()
             digest = hashlib.sha256(raw).hexdigest()
             mtime = path.stat().st_mtime_ns
-            if known.get(rel) == (mtime, digest):
+            if known_note is not None and known_note[1] == digest:
+                con.execute("UPDATE notes SET mtime=? WHERE path=?", (mtime, rel))
                 continue
             text = raw.decode("utf-8", errors="replace")
             meta, body = parse_frontmatter(text)

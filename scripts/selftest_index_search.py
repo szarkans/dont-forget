@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Small dependency-free self-check for index.py and search.py."""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -95,6 +96,123 @@ with tempfile.TemporaryDirectory() as tmp:
         env=env, capture_output=True, text=True, check=True,
     )
     assert json.loads(second.stdout)["coverage"]["matched_chunks"] == 1
+
+# An unchanged note must stop at stat: reading every note just to prove its digest is
+# unchanged made a no-op refresh too slow for the SessionStart hook.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Note\n\nunchanged\n")
+    db = home / "mtime-skip.db"
+    build(vault, db)
+
+    vault_reads = []
+    original_read_bytes = Path.read_bytes
+
+    def count_vault_reads(path: Path) -> bytes:
+        if path == note:
+            vault_reads.append(path)
+        return original_read_bytes(path)
+
+    Path.read_bytes = count_vault_reads
+    try:
+        unchanged = build(vault, db)
+    finally:
+        Path.read_bytes = original_read_bytes
+    assert unchanged["reindexed"] == 0, unchanged
+    assert vault_reads == [], vault_reads
+
+# A metadata-only touch pays for one digest, then heals the stored mtime so later
+# refreshes return to the read-free path.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Note\n\nsame content\n")
+    db = home / "mtime-touch.db"
+    build(vault, db)
+    con = sqlite3.connect(db)
+    stored_mtime = con.execute("SELECT mtime FROM notes WHERE path='note.md'").fetchone()[0]
+    con.close()
+
+    os.utime(note, ns=(note.stat().st_atime_ns, stored_mtime + 1_000_000_000))
+    touched_mtime = note.stat().st_mtime_ns
+    assert touched_mtime != stored_mtime
+    touched = build(vault, db)
+    con = sqlite3.connect(db)
+    healed_mtime = con.execute("SELECT mtime FROM notes WHERE path='note.md'").fetchone()[0]
+    con.close()
+    assert touched["reindexed"] == 0, touched
+    assert healed_mtime == touched_mtime, (healed_mtime, touched_mtime)
+
+    vault_reads = []
+    original_read_bytes = Path.read_bytes
+
+    def count_vault_reads(path: Path) -> bytes:
+        if path == note:
+            vault_reads.append(path)
+        return original_read_bytes(path)
+
+    Path.read_bytes = count_vault_reads
+    try:
+        healed = build(vault, db)
+    finally:
+        Path.read_bytes = original_read_bytes
+    assert healed["reindexed"] == 0, healed
+    assert vault_reads == [], vault_reads
+
+# Restoring mtime after changing content is the paid tradeoff of the mtime gate, not a
+# bug: such changes are deliberately missed until --rebuild.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Note\n\nold content\n")
+    db = home / "mtime-restored.db"
+    build(vault, db)
+    con = sqlite3.connect(db)
+    stored_mtime, stored_digest = con.execute(
+        "SELECT mtime,sha256 FROM notes WHERE path='note.md'").fetchone()
+    con.close()
+
+    note.write_text("# Note\n\nnew content\n")
+    os.utime(note, ns=(note.stat().st_atime_ns, stored_mtime))
+    restored = build(vault, db)
+    con = sqlite3.connect(db)
+    still_stored = con.execute("SELECT mtime,sha256 FROM notes WHERE path='note.md'").fetchone()
+    con.close()
+    assert restored["reindexed"] == 0, restored
+    assert still_stored == (stored_mtime, stored_digest), still_stored
+
+# A normal edit changes both content and mtime, so it still takes the full reindex path
+# and records the new stat and digest.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    note = vault / "note.md"
+    note.write_text("# Note\n\nold content\n")
+    db = home / "mtime-edit.db"
+    build(vault, db)
+    con = sqlite3.connect(db)
+    stored_mtime = con.execute("SELECT mtime FROM notes WHERE path='note.md'").fetchone()[0]
+    con.close()
+
+    edited = b"# Note\n\nnew content\n"
+    note.write_bytes(edited)
+    os.utime(note, ns=(note.stat().st_atime_ns, stored_mtime + 1_000_000_000))
+    edited_mtime = note.stat().st_mtime_ns
+    changed = build(vault, db)
+    con = sqlite3.connect(db)
+    stored = con.execute("SELECT mtime,sha256 FROM notes WHERE path='note.md'").fetchone()
+    con.close()
+    assert changed["reindexed"] == 1, changed
+    assert stored == (edited_mtime, hashlib.sha256(edited).hexdigest()), stored
+
 # Regression: text matches used to fill the whole budget, so link neighbours — the only
 # thing this search does that plain FTS5 does not — never reached the output. Fragment
 # sizes here are deliberately realistic: with tiny neighbours the old code passed too.
