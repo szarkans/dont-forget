@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2 — 2026-08-23
+
+### Fixed
+- `feedback-log.py` no longer crashes on a corrupted `feedback.jsonl` line — malformed lines are skipped, same contract as `checkup.py`. (#2)
+- Session notes without a `project` field appear in the session-start digest again, marked `no project`, after project-matched tails. (#4)
+- Project matching respects word boundaries: `cat` no longer pulls `catcraft` tails; `acme` still matches `acme-corp`.
+
 ## 0.6.1 — 2026-08-22
 
 - Dots are now allowed in note filenames. The ban was inherited from mnemo's
