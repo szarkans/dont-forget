@@ -11,7 +11,7 @@ import sqlite3
 import time
 from pathlib import Path
 
-from common import DEFAULT_DB, connect_ro, vault_from_config
+from common import DEFAULT_DB, NotConfigured, connect_ro, vault_from_config
 
 FM_LINE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
@@ -251,8 +251,13 @@ def refresh_index(vault: Path | None = None, db_path: Path | None = None) -> str
     """
     try:
         build(vault if vault is not None else vault_from_config(), db_path or DEFAULT_DB)
+    except NotConfigured as error:
+        # This one already reads as instructions to the user, so it is passed through
+        # whole. Wrapping it in "IndexError: ..." is how a fixable setup step ends up
+        # looking like a crash.
+        return str(error)
     except (OSError, ValueError, sqlite3.Error, json.JSONDecodeError) as error:
-        return f"{type(error).__name__}: {error}"
+        return f"dont-forget: index not refreshed ({type(error).__name__}: {error})"
     return None
 
 
@@ -266,10 +271,10 @@ def main() -> None:
     if vault is None:
         try:
             vault = vault_from_config()
-        except (OSError, ValueError, json.JSONDecodeError) as error:
-            parser.error(f"cannot read vault: {error}")
+        except NotConfigured as error:
+            raise SystemExit(str(error)) from None
     if not vault.is_dir():
-        parser.error(f"vault is not a directory: {vault}")
+        raise SystemExit(f"vault is not a directory: {vault}")
     print(json.dumps(build(vault, args.db, args.rebuild), ensure_ascii=False))
 
 

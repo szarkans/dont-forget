@@ -97,7 +97,9 @@ def main():
     parser.add_argument("--feedback", type=Path, default=DEFAULT_FEEDBACK)
     args = parser.parse_args()
     if not args.db.is_file():
-        parser.error("index not found; run index.py first")
+        raise SystemExit(f"no index at {args.db}. Run /dont-forget:setup if this plugin "
+                         "has never been pointed at a vault, otherwise /dont-forget:about "
+                         "rebuilds the index on its next search.")
     print(json.dumps(report(args.db, feedback_path=args.feedback), ensure_ascii=False, indent=2))
 
 
