@@ -13,6 +13,11 @@ from pathlib import Path
 
 from common import vault_from_config
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # Windows runs unlocked.
+
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -81,6 +86,9 @@ def main() -> None:
         if action not in ("create", "replace"):
             raise ValueError("action must be create or replace")
         vault = args.vault or vault_from_config()
+        if fcntl is not None:
+            vault_fd = os.open(vault, os.O_RDONLY)
+            fcntl.flock(vault_fd, fcntl.LOCK_EX)
         if action == "replace":
             expected_sha = payload.get("expected_sha")
             if not isinstance(expected_sha, str) or len(expected_sha) != 64:
