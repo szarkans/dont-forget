@@ -3,3 +3,6 @@ __pycache__/
 *Zone.Identifier
 
 docs/
+experiments/
+research_workspace/
+.pytest_cache/

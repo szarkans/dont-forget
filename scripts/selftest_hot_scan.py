@@ -75,11 +75,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(truncated_raw) <= one_tail_size + 1
 
     # The digest is per project: threads from other projects must not leak into a session.
-    scoped, scoped_raw = invoke(db, "--window", "7", "--project", "bts")
+    scoped, scoped_raw = invoke(db, "--window", "7", "--project", "acme")
     assert scoped["tails"] == ["[ ] belongs to another project (Session — Other project)"], scoped
     assert b"ship fix" not in scoped_raw
-    assert "open threads in bts" in scoped["note"]
-    assert HOT_SCAN["same_project"]("ACME Corp", "bts") and not HOT_SCAN["same_project"]("widgets", "bts")
+    assert "open threads in acme" in scoped["note"]
+    assert HOT_SCAN["same_project"]("ACME Corp", "acme") and not HOT_SCAN["same_project"]("widgets", "acme")
 
     missing, _ = invoke(root / "missing.db", "--project", "")
     assert missing == {"tails": [], "note": ""}

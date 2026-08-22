@@ -52,7 +52,7 @@ def normalize(name: str) -> str:
 
 
 def same_project(note_project: str, project: str) -> bool:
-    """Match loosely: vault notes spell one project as bts, acme-corp, ACME Corp."""
+    """Match loosely: vault notes spell one project many ways — acme, acme-corp, ACME Corp."""
     note_project = normalize(note_project or "")
     if not note_project or not project:
         return False

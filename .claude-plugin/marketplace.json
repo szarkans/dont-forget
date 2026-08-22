@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "dont-forget",
+  "description": "Persistent Zettelkasten memory for Claude Code over a plain Markdown vault",
+  "owner": {
+    "name": "szarkans",
+    "url": "https://github.com/szarkans"
+  },
+  "plugins": [
+    {
+      "name": "dont-forget",
+      "description": "I'm with you in the dark. Long-term memory for Claude Code over a folder of Markdown notes: recall on session start, full-text plus link-graph search, atomic fact capture, session continuity.",
+      "version": "0.3.1",
+      "source": "./",
+      "category": "productivity",
+      "keywords": ["memory", "obsidian", "zettelkasten", "recall", "second-brain", "session-notes", "knowledge-management"]
+    }
+  ]
+}

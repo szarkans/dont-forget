@@ -2,41 +2,95 @@
 
 *I'm with you in the dark.*
 
-Persistant memory for AI-agents in Zettelkasten style in Obsidian notes style
+Persistent memory for AI agents — Zettelkasten notes in plain Markdown, Obsidian-style.
 
 Highly inspired by [mnemo](https://github.com/jojoprison/mnemo).
 
-## What this about?
+🌍 [Русский](README.ru.md) · [中文](README.zh.md)
 
-A group of .md files for every gotcha/session-handoff/idea/fact you had whilist working on your project and decided (or you agent decided) to save.    
-By that you can recall "oh, we did that two years ago!" or "wait no, that messed up our database two month ago" and things like so.    
-recall your memories by local lightweight "rag" to get every note about this particular thing - maybe you'll find some cross-references from other projects!
+## What is this about?
 
-> Why not claude-mem/\<insert other memory plugin\>?
+A folder of `.md` files for every gotcha / session-handoff / idea / fact you hit while
+working on your project and decided (or your agent decided) to save.
 
-You may ask. claude-mem is fast-memory (like RAM), agent always sees it. `dont-forget`, on the other hand, is long-term memory (like HDD) - both for you and your agent.
+Then you can recall "oh, we did that two years ago!" or "wait no, that messed up our
+database two months ago". Search runs locally over SQLite full-text search plus a walk
+across the `[[wiki-links]]` between your notes — you may find cross-references from
+other projects you forgot existed.
 
-## Commands
+> Why not claude-mem / \<insert other memory plugin\>?
 
-`/dont-forget:this` - "hey, lets save this fact/gotcha/trouble so we wont forget about it"
-
-`/dont-forget:session` - end-of-session skill, recalling everything you've done to session note. best to use for session end or session-handoff
-
-`/dont-forget:review` - rollback to every task you've done in current session and recheck if its really done, what gotchas you missed and overall rate of your session
-
-`/dont-forget:about` - "hey why did we switched to postgresql?" or "hey what exactly was bad in here?". recalling your memories
-
-`/dont-forget:checkup` - `/health` for this plugin
+claude-mem is fast memory (like RAM), the agent always sees it. dont-forget is
+long-term memory (like an HDD) — for you and your agent both.
 
 ## Install
 
-TBA
+**1. Add the plugin.** In Claude Code:
 
-## Why your readme is written like that?
+```
+/plugin marketplace add szarkans/dont-forget
+/plugin install dont-forget@dont-forget
+```
 
-Because its written by me, human. I'm tired of b2b-ai-saas-agentic-loop-skills description, pain in the ass to read them.  
-simple words prevails.
+Or from your shell:
+
+```bash
+claude plugin marketplace add szarkans/dont-forget
+claude plugin install dont-forget@dont-forget
+```
+
+**2. Point it at your vault.** This step is required — nothing works without it:
+
+```bash
+mkdir -p ~/.dont-forget
+echo '{"vault": "~/path/to/your/notes"}' > ~/.dont-forget/config.json
+```
+
+Any folder of `.md` files works. Obsidian is not required — it's just a folder.
+
+**3. Restart Claude Code.** The index builds itself on the first search and keeps
+itself fresh after that. Nothing to run by hand.
+
+Requirements: `python3`. No pip installs, no dependencies — standard library only.
+
+> **Not `npx skills add`.** That tool copies the skill folder alone. This plugin's
+> skills call helper scripts in `scripts/` and register a session-start hook, neither
+> of which comes along — you'd get skills that crash on first use. Measured, not
+> guessed. Use the marketplace route above.
+
+## Commands
+
+`/dont-forget:this` — "hey, let's save this fact/gotcha/decision so we don't forget it".
+Writes atomic notes and de-duplicates against what's already in the vault.
+
+`/dont-forget:about` — "hey why did we switch to postgres?", "what exactly was bad in
+here?". Searches the vault and answers with citations plus an honest coverage report —
+including telling you straight when the vault has nothing on your question.
+
+`/dont-forget:session` — end-of-session skill. Writes what you did into a session note
+and indexes its open threads, so the next session picks them up.
+
+`/dont-forget:review` — looks back over the session and audits it: what got done, what
+you claimed was done, which facts and commitments never made it into memory.
+
+`/dont-forget:checkup` — health of your **vault**: commits it to git and reports what
+the index actually sees.
+
+`/dont-forget:feedback` — logs proven search failures and wins, so the search can be
+fixed against evidence instead of vibes.
+
+## What it does on its own
+
+At the start of every session it injects your open threads from the last 7 days —
+the unfinished checkboxes from your session notes. No command needed.
+
+## Why is your readme written like that?
+
+Because it's written by me, a human. I'm tired of b2b-ai-saas-agentic-loop-skills
+descriptions, they're a pain in the ass to read.
+
+Simple words prevail.
 
 ## License
 
-mit
+MIT — see [LICENSE](LICENSE).
