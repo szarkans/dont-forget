@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 — 2026-08-22
+
+- The marketplace manifest was left at 0.3.2 while `plugin.json` said 0.4.0, so
+  anyone installing through the marketplace got a manifest one release behind.
+  Both manifests now carry the version; they are the only two places that do.
+
 ## 0.4.0 — 2026-08-22
 
 - `/dont-forget:setup`: the vault is detected, not typed. Reads Obsidian's own
