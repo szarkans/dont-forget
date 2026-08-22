@@ -41,10 +41,10 @@ CRITICAL_MARGIN = 50_000
 # Absolute marks for context rot. Unreachable on a 200k window, which is correct — that
 # session ends long before quality drifts this far.
 ROT_MARKS = (500_000, 900_000)
-# Context windows a model may actually have. The transcript records a model id with its
-# "[1m]" suffix stripped, so a 1M session and a 200k one are written identically; the
-# suffix survives in ~/.claude.json, and where even that is unknown the ladder climbs by
-# observation. Guessing high would silence the hook forever, so it always guesses low.
+# A 1M rung would put Sonnet 5's reserve boundary at its ~967k default compact point,
+# too late for a nudge; use that documented compact point as its checkpoint instead.
+SONNET_5_CHECKPOINT = 967_000
+# Unknown models keep the full fallback ladder. Known models use documented family rungs.
 CEILING_LADDER = (200_000, 500_000, 1_000_000)
 # The range Claude Code itself accepts for autoCompactWindow; a value outside it is ignored.
 WINDOW_MIN, WINDOW_MAX = 100_000, 1_000_000
@@ -196,31 +196,41 @@ def configured_window(cwd: Path) -> int | None:
 
 
 def model_ceiling(cwd: Path, model: str | None, used: int, state_path: Path | None = None) -> int:
-    """The model's context window: a guess from ~/.claude.json, corrected by observation.
+    """The next model-family checkpoint, corrected by suffix evidence and observation.
 
     lastModelUsage keeps model ids *with* the "[1m]" suffix the transcript drops, keyed by
     working directory, and it is a record of what actually ran rather than what is
     configured — so it survives the user clearing `settings.model` back to the default.
-    Both keys present means the directory has seen both variants; the smaller one is
-    taken, because guessing high costs every future warning while guessing low costs one
-    early nudge that the ladder then corrects.
+    For model families with both window variants, both keys present keeps the 200k first
+    checkpoint while a suffix-only key skips directly to 1M.
 
-    The ladder is also what covers everything this file cannot recognise — a model served
-    over a custom API, an unfamiliar plan, a future id. Whatever the guess, a session that
-    outgrew it proves the window is larger, and the next rung is taken.
+    With no readable model id the full ladder preserves the old conservative fallback.
+    Whatever the checkpoints, observed usage advances to the smallest rung that can hold
+    it.
     """
-    ceiling = CEILING_LADDER[0]
-    state = read_json(state_path or Path.home() / ".claude.json")
-    if isinstance(state, dict) and model:
-        projects = state.get("projects")
-        entry = projects.get(str(cwd)) if isinstance(projects, dict) else None
-        usage = entry.get("lastModelUsage") if isinstance(entry, dict) else None
-        if isinstance(usage, dict) and f"{model}[1m]" in usage and model not in usage:
-            ceiling = CEILING_LADDER[-1]
-    for rung in CEILING_LADDER:
-        if rung >= ceiling and used <= rung:
+    rungs = CEILING_LADDER
+    if model:
+        model_id = model.lower()
+        if "haiku" in model_id:
+            rungs = CEILING_LADDER[:1]
+        elif "fable" in model_id or "mythos" in model_id:
+            rungs = CEILING_LADDER[-1:]
+        elif "sonnet-5" in model_id:
+            rungs = (SONNET_5_CHECKPOINT,)
+        else:
+            rungs = (CEILING_LADDER[0], CEILING_LADDER[-1])
+            state = read_json(state_path or Path.home() / ".claude.json")
+            if isinstance(state, dict):
+                projects = state.get("projects")
+                entry = projects.get(str(cwd)) if isinstance(projects, dict) else None
+                usage = entry.get("lastModelUsage") if isinstance(entry, dict) else None
+                if (isinstance(usage, dict) and f"{model}[1m]" in usage
+                        and model not in usage):
+                    rungs = CEILING_LADDER[-1:]
+    for rung in rungs:
+        if used <= rung:
             return rung
-    return CEILING_LADDER[-1]
+    return rungs[-1]
 
 
 def resolve_window(cwd: Path, model: str | None, used: int, state_path: Path | None = None) -> int:

@@ -88,31 +88,44 @@ def check_decide() -> None:
 
 
 def check_ceiling(tmp: Path) -> None:
-    """The suffix decides, observation overrules, and ambiguity resolves downwards."""
+    """Model family sets checkpoints, suffix evidence skips ahead, and usage climbs."""
     cwd = Path("/work/thing")
     state = tmp / "claude.json"
+
+    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
+        "claude-fable-5": {}}}}}), encoding="utf-8")
+    assert guard.model_ceiling(cwd, "claude-fable-5", 130_000, state) == 1_000_000
+
+    assert guard.model_ceiling(cwd, "claude-sonnet-5", 130_000, state) == 967_000
+
+    assert guard.model_ceiling(cwd, "claude-haiku-4-5", 130_000, state) == 200_000
+
+    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
+        "claude-opus-5": {}}}}}), encoding="utf-8")
+    assert guard.model_ceiling(cwd, "claude-opus-5", 130_000, state) == 200_000
+    assert guard.model_ceiling(cwd, "claude-opus-5", 260_000, state) == 1_000_000
 
     state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
         "claude-opus-5[1m]": {}}}}}), encoding="utf-8")
     assert guard.model_ceiling(cwd, "claude-opus-5", 50_000, state) == 1_000_000
 
-    # Both variants seen here: take the smaller, an over-guess would silence every mark.
+    # Both variants seen here: keep the first checkpoint rather than skipping to 1M.
     state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
         "claude-opus-5": {}, "claude-opus-5[1m]": {}}}}}), encoding="utf-8")
     assert guard.model_ceiling(cwd, "claude-opus-5", 50_000, state) == 200_000
 
-    # Nothing known — a custom API model, an unfamiliar plan — starts low and climbs by
-    # observation, because a session cannot hold more than its own window.
+    # No readable model id starts low and climbs by observation, because a session cannot
+    # hold more than its own window.
     missing = tmp / "absent.json"
-    assert guard.model_ceiling(cwd, "whatever", 50_000, missing) == 200_000
-    assert guard.model_ceiling(cwd, "whatever", 260_000, missing) == 500_000
-    assert guard.model_ceiling(cwd, "whatever", 700_000, missing) == 1_000_000
+    assert guard.model_ceiling(cwd, None, 50_000, missing) == 200_000
+    assert guard.model_ceiling(cwd, None, 260_000, missing) == 500_000
+    assert guard.model_ceiling(cwd, None, 700_000, missing) == 1_000_000
     # The ladder never climbs past its top rung.
-    assert guard.model_ceiling(cwd, "whatever", 5_000_000, missing) == 1_000_000
+    assert guard.model_ceiling(cwd, None, 5_000_000, missing) == 1_000_000
 
 
 def check_window(tmp: Path) -> None:
-    """A configured window is a ceiling request, not the threshold."""
+    """A configured window is a ceiling request capped by the model-family checkpoint."""
     config = tmp / "cc"
     config.mkdir(parents=True, exist_ok=True)
     settings = config / "settings.json"
@@ -186,10 +199,10 @@ def check_end_to_end(tmp: Path) -> None:
     payload = {"session_id": "s1", "transcript_path": str(path), "cwd": str(cwd),
                "stop_hook_active": False}
 
-    # 430k with nothing known about the model: the ladder lifts the ceiling to 500k, so
-    # the compact point is 467k and the warn mark, clamped to a quarter, is crossed.
+    # Observed usage lifts Opus to its 1M rung, so the 600k ceiling request takes effect.
     first = json.loads(run_hook(home, config_dir, payload))
     assert first["decision"] == "block", first
+    assert "~600k window" in first["reason"], first
     assert "/dont-forget:" in first["reason"], first
     assert "ignore this message" in first["reason"], first
     # Default: the agent offers and waits. Saving writes notes and commits a vault, and
