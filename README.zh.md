@@ -87,6 +87,8 @@ echo '{"vault": "~/你的/笔记/路径"}' > ~/.dont-forget/config.json
 
 大白话，讲事实。其余细节问你的智能体去。
 
+想改点什么？见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 许可证
 
 MIT
