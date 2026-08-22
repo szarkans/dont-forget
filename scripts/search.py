@@ -4,15 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
+import os
 import re
 import sqlite3
 import sys
 from collections import Counter
 from pathlib import Path
 
-from common import DEFAULT_DB, connect_ro
+from common import DEFAULT_DB, DEFAULT_QUERY_LOG, connect_ro
 from index import refresh_index
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
@@ -249,7 +251,9 @@ def main() -> None:
     parser.add_argument("--hub-cap", type=int, default=30)
     parser.add_argument("--graph-share", type=float, default=0.4)
     parser.add_argument("--vault", type=Path, help="index this vault instead of the configured one")
-    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="use this index file")
+    parser.add_argument("--db", type=Path, default=None, help="use this index file")
+    parser.add_argument("--raw", type=str, default=None,
+                        help="the user's original message that triggered this search, verbatim")
     args = parser.parse_args()
     payload = {}
     if args.query is None and not sys.stdin.isatty():
@@ -257,13 +261,38 @@ def main() -> None:
     query = args.query if args.query is not None else payload.get("query", "")
     budget = int(payload.get("budget", args.budget))
     hub_cap = int(payload.get("hub_cap", args.hub_cap))
-    index_error = refresh_index(args.vault, args.db)
-    if index_error and not args.db.exists():
+    db_path = args.db or DEFAULT_DB
+    index_error = refresh_index(args.vault, db_path)
+    if index_error and not db_path.exists():
         raise SystemExit(f"search.py: index refresh failed: {index_error}")
-    result = search(query, budget, hub_cap, args.db, args.graph_share)
+    result = search(query, budget, hub_cap, db_path, args.graph_share)
     if index_error:
         print(f"search.py: index refresh failed; searching stale index: {index_error}", file=sys.stderr)
         result["coverage"]["index_stale"] = True
+    if args.vault is None and args.db is None:
+        try:
+            top: list[str] = []
+            seen: set[str] = set()
+            for fragment in result["fragments"]:
+                path = fragment.get("path")
+                if path not in seen:
+                    seen.add(path)
+                    top.append(path)
+                if len(top) >= 5:
+                    break
+            DEFAULT_QUERY_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with DEFAULT_QUERY_LOG.open("a", encoding="utf-8") as out:
+                out.write(json.dumps({
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                    "cwd": os.getcwd(),
+                    "raw": args.raw,
+                    "query": query,
+                    "weak_match": result["coverage"].get("weak_match"),
+                    "top": top,
+                    "n_fragments": len(result["fragments"]),
+                }, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

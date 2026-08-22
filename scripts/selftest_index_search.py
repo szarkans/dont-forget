@@ -69,6 +69,18 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     assert (config_dir / "index.db").is_file()
     assert json.loads(first.stdout)["coverage"]["matched_chunks"] == 1
+    query_log = config_dir / "queries.jsonl"
+    log_lines_before = 0
+    if query_log.is_file():
+        with query_log.open(encoding="utf-8") as handle:
+            log_lines_before = sum(1 for _ in handle)
+    subprocess.run(
+        [sys.executable, str(search_script), "freshnessbeta", "--db", str(config_dir / "skip.db"), "--raw", "x"],
+        env=env, capture_output=True, text=True, check=True,
+    )
+    with query_log.open(encoding="utf-8") as handle:
+        log_lines_after = sum(1 for _ in handle)
+    assert log_lines_after == log_lines_before
     (vault / "note.md").write_text("# Note\n\nfreshnessbeta\n")
     second = subprocess.run(
         [sys.executable, str(search_script), "freshnessbeta"],

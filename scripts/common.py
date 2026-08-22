@@ -14,6 +14,7 @@ from pathlib import Path
 HOME_DIR = Path.home() / ".dont-forget"
 DEFAULT_DB = HOME_DIR / "index.db"
 DEFAULT_FEEDBACK = HOME_DIR / "feedback.jsonl"
+DEFAULT_QUERY_LOG = HOME_DIR / "queries.jsonl"
 CONFIG_PATH = HOME_DIR / "config.json"
 
 

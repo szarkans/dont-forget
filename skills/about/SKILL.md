@@ -12,9 +12,10 @@ within a byte budget, so do not duplicate that logic manually.
 
 ## Search
 
-From the plugin root, run `python3 scripts/search.py "<question>"`. Pass the user's
+From the plugin root, run `python3 scripts/search.py "<question>" --raw "<the user's message that triggered this recall, verbatim>"`. Pass the user's
 entire query unchanged as a single argument. Do not invent keywords, split the
 question into words, or run separate searches: that distorts ranking and coverage.
+--raw is the shadow log that lets the user later check what recall was asked and what it returned; always pass it.
 
 - [ ] `search.py` keeps the index fresh automatically; do nothing manually. If it
   reports an index error, pass that error to the user unchanged.
