@@ -25,42 +25,24 @@ long-term memory (like an HDD) — for you and your agent both.
 
 ## Install
 
-**1. Add the plugin.** In Claude Code:
-
 ```
 /plugin marketplace add szarkans/dont-forget
 /plugin install dont-forget@dont-forget
-```
 
-Or from your shell:
-
-```bash
+or
 claude plugin marketplace add szarkans/dont-forget
 claude plugin install dont-forget@dont-forget
 ```
 
-**2. Point it at your notes.** Run `/dont-forget:setup`. It reads Obsidian's own vault
-list, shows you what it found, and writes the config once you pick — no path to type.
+then
 
-Any folder of `.md` files works. Obsidian is not required — it's just a folder, and
-setup takes a path you name if it finds nothing.
+`/dont-forget:setup`
 
-**3. Restart Claude Code.** The index builds itself on the first search and keeps
-itself fresh after that. Nothing to run by hand.
+then
+
+Use Claude Code as usual! After some time you'll have your second-brain-ish.
 
 Requirements: `python3`. No pip installs, no dependencies — standard library only.
-
-> **Not `npx skills add`.** That tool copies the skill folder alone. This plugin's
-> skills call helper scripts in `scripts/` and register hooks, neither
-> of which comes along — you'd get skills that crash on first use. Measured, not
-> guessed. Use the marketplace route above.
-
-## Performance
-
-On WSL2, keep your vault on the Linux filesystem, not under `/mnt/c`. Measured on a
-760-note vault: a no-change index refresh takes ~85 ms on ext4 versus ~6 s on `/mnt/c`
-(drvfs/9p per-file latency adds up fast). The `SessionStart` hook has a 10 s timeout,
-so a vault on `/mnt/c` can burn most of that budget before anything else runs.
 
 ## Commands
 
@@ -91,23 +73,14 @@ fixed against evidence instead of vibes.
 At the start of every session it injects your open threads from the last 7 days,
 the unfinished checkboxes from your session notes. No command needed.
 
-And it speaks up before Claude Code auto-compacts — the moment your raw conversation
-gets swapped for a summary. It asks the agent to save the session while there's still
-room to do it properly, not once the window is already gone. It also says something
-much earlier, when the context has simply grown long enough that answers get worse,
-and suggests starting fresh — suggests, it never clears anything itself.
-
-By default it *offers* and waits — saving writes notes and commits your vault, and the
-hook fires on a schedule you never asked for, so the call stays yours. Want it to just
-get on with it: `"autocompact_autosave": true` in `~/.dont-forget/config.json`.
-Don't want any of it at all: `"autocompact_nudge": false` in the same file.
+Also you will be notified when autocompact is close to run `/dont-forget:session` so you will not lose progress or to have good handoff for new session.
 
 ## Why is your readme written like that?
 
 Because it's written by me, a human. I'm tired of b2b-ai-saas-agentic-loop-skills
 descriptions, they're a pain in the ass to read.
 
-Plain and to the point. For the rest of the details, ask your agent.
+Plain and to the point. For the rest of the details just ask your agent.
 
 ## License
 

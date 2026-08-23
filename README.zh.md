@@ -24,41 +24,24 @@ claude-mem 是快记忆（像内存），智能体一直看得见。dont-forget 
 
 ## 安装
 
-**1. 安装插件。** 在 Claude Code 里：
-
 ```
 /plugin marketplace add szarkans/dont-forget
 /plugin install dont-forget@dont-forget
-```
 
-或者在终端里：
-
-```bash
+or
 claude plugin marketplace add szarkans/dont-forget
 claude plugin install dont-forget@dont-forget
 ```
 
-**2. 告诉它笔记在哪。** 运行 `/dont-forget:setup`。它会读取 Obsidian 自己的库列表，
-把找到的结果列给你，你选定之后它写入配置 —— 不用手敲路径。
+然后
 
-任何装着 `.md` 文件的文件夹都行。不需要 Obsidian —— 它就是个文件夹；要是什么都没找到，
-setup 会接受你给出的路径。
+`/dont-forget:setup`
 
-**3. 重启 Claude Code。** 索引会在第一次搜索时自动建立，之后自动保持更新。
-没有需要你手动跑的东西。
+然后
+
+接下来照常用 Claude Code 就行。用一阵子之后，你就有了个类似第二大脑的东西。
 
 依赖：只要 `python3`。不用 pip 装任何东西 —— 只用标准库。
-
-> **不要用 `npx skills add`。** 那个工具只复制技能文件夹本身。本插件的技能会调用
-> `scripts/` 里的辅助脚本，并注册一个会话启动钩子，这两样都不会被带过去 ——
-> 装出来的技能第一次调用就会崩。这是实测结果，不是猜测。请用上面的 marketplace 方式。
-
-## 性能
-
-在 WSL2 上，笔记库要放在 Linux 文件系统里，不要放在 `/mnt/c` 下。实测：760 篇笔记的
-库，无变化时索引刷新在 ext4 上约 85 毫秒，在 `/mnt/c` 上约 6 秒（drvfs/9p 的单文件延迟
-累加起来很可观）。`SessionStart` 钩子的超时是 10 秒，笔记库放在 `/mnt/c` 上会在别的事
-情开始前就吃掉大半个预算。
 
 ## 命令
 
@@ -87,14 +70,8 @@ setup 会接受你给出的路径。
 每次会话开始时，自动注入最近 7 天里未完成的线索 —— 也就是会话笔记里没打勾的复选框。
 不需要任何命令。
 
-还会在 Claude Code 自动压缩之前出声 —— 也就是原始对话被换成摘要的那一刻。它会让
-智能体趁还有余地时把这次会话存好，而不是等窗口已经用完。上下文只是变得太长、
-回答开始变差时，它也会更早提醒一次，并建议开一个新会话 —— 只是建议，它从不自己清空。
-
-默认情况下它只是*建议*并等待 —— 保存会写笔记、会提交你的库，而这个钩子是按你没要求过的
-时机触发的，所以由你来定。想让它直接动手：在 `~/.dont-forget/config.json` 里写
-`"autocompact_autosave": true`。什么都不想要：在同一个文件里写
-`"autocompact_nudge": false`。
+另外，快要自动压缩的时候会提醒你跑一下 `/dont-forget:session`，这样进度不会丢，
+下次会话也能接得上。
 
 ## 为什么 readme 写成这样
 
