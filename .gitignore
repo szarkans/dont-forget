@@ -6,3 +6,4 @@ docs/
 experiments/
 research_workspace/
 .pytest_cache/
+CLAUDE.md
