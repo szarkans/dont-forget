@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.2 — 2026-08-24
+
+### Fixed
+- The autocompact Stop hook (`context-guard.py`) no longer fires spurious "context is
+  about to compact" warnings mid-session. It used to guess each model's window from a
+  hardcoded family table and clamp your configured `autoCompactWindow` down to it — a
+  guess that put current large-window models (e.g. opus-4-8) at 200k and warned from
+  ~125k on a session whose real window was far larger. It now trusts the configured
+  `autoCompactWindow`, falling back to 1M when unset (the default on current accounts).
+  Known cost: a genuinely small-window model run under a larger setting loses the
+  compaction nudge — the model table that used to catch that is gone by design.
+
 ## 0.7.1 — 2026-08-24
 
 ### Fixed

@@ -87,66 +87,32 @@ def check_decide() -> None:
     assert guard.decide(520_000, window, [], False)[0] == "rot-500000"
 
 
-def check_ceiling(tmp: Path) -> None:
-    """Model family sets checkpoints, suffix evidence skips ahead, and usage climbs."""
-    cwd = Path("/work/thing")
-    state = tmp / "claude.json"
-
-    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
-        "claude-fable-5": {}}}}}), encoding="utf-8")
-    assert guard.model_ceiling(cwd, "claude-fable-5", 130_000, state) == 1_000_000
-
-    assert guard.model_ceiling(cwd, "claude-sonnet-5", 130_000, state) == 967_000
-
-    assert guard.model_ceiling(cwd, "claude-haiku-4-5", 130_000, state) == 200_000
-
-    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
-        "claude-opus-5": {}}}}}), encoding="utf-8")
-    assert guard.model_ceiling(cwd, "claude-opus-5", 130_000, state) == 200_000
-    assert guard.model_ceiling(cwd, "claude-opus-5", 260_000, state) == 1_000_000
-
-    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
-        "claude-opus-5[1m]": {}}}}}), encoding="utf-8")
-    assert guard.model_ceiling(cwd, "claude-opus-5", 50_000, state) == 1_000_000
-
-    # Both variants seen here: keep the first checkpoint rather than skipping to 1M.
-    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
-        "claude-opus-5": {}, "claude-opus-5[1m]": {}}}}}), encoding="utf-8")
-    assert guard.model_ceiling(cwd, "claude-opus-5", 50_000, state) == 200_000
-
-    # No readable model id starts low and climbs by observation, because a session cannot
-    # hold more than its own window.
-    missing = tmp / "absent.json"
-    assert guard.model_ceiling(cwd, None, 50_000, missing) == 200_000
-    assert guard.model_ceiling(cwd, None, 260_000, missing) == 500_000
-    assert guard.model_ceiling(cwd, None, 700_000, missing) == 1_000_000
-    # The ladder never climbs past its top rung.
-    assert guard.model_ceiling(cwd, None, 5_000_000, missing) == 1_000_000
-
-
 def check_window(tmp: Path) -> None:
-    """A configured window is a ceiling request capped by the model-family checkpoint."""
+    """The window follows the configured autoCompactWindow, and falls back to the large
+    default when nothing valid is set — no per-model guessing left."""
     config = tmp / "cc"
     config.mkdir(parents=True, exist_ok=True)
     settings = config / "settings.json"
     settings.write_text(json.dumps({"autoCompactWindow": 600_000}), encoding="utf-8")
-    state = tmp / "claude-1m.json"
     cwd = tmp / "project"
     cwd.mkdir(exist_ok=True)
-    state.write_text(json.dumps({"projects": {str(cwd): {"lastModelUsage": {
-        "claude-opus-5[1m]": {}}}}}), encoding="utf-8")
 
     os.environ["CLAUDE_CONFIG_DIR"] = str(config)
     os.environ.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
     try:
-        assert guard.resolve_window(cwd, "claude-opus-5", 50_000, state) == 600_000
-        # A 600k setting on a 200k model is still a 200k session.
-        assert guard.resolve_window(cwd, "claude-haiku-4-5", 50_000, state) == 200_000
-        # Out of the range Claude Code accepts, so ignored rather than trusted.
+        # A configured window is trusted as-is, whatever the model — this is the opus-4-8
+        # fix: no model ceiling clamps 600k down to 200k any more.
+        assert guard.resolve_window(cwd) == 600_000
+        # Out of the range Claude Code accepts, so ignored, and the default takes over.
         settings.write_text(json.dumps({"autoCompactWindow": 9_000_000}), encoding="utf-8")
-        assert guard.resolve_window(cwd, "claude-opus-5", 50_000, state) == 1_000_000
+        assert guard.resolve_window(cwd) == guard.DEFAULT_WINDOW
+        # Nothing configured at all: the large default, not a per-model guess.
+        settings.write_text(json.dumps({}), encoding="utf-8")
+        assert guard.resolve_window(cwd) == guard.DEFAULT_WINDOW
+        # The env var wins over settings, the way Claude Code resolves it.
         os.environ["CLAUDE_CODE_AUTO_COMPACT_WINDOW"] = "300000"
-        assert guard.resolve_window(cwd, "claude-opus-5", 50_000, state) == 300_000
+        assert guard.resolve_window(cwd) == 300_000
+        os.environ.pop("CLAUDE_CODE_AUTO_COMPACT_WINDOW", None)
         assert guard.autocompact_enabled(cwd) is True
         settings.write_text(json.dumps({"autoCompactEnabled": False}), encoding="utf-8")
         assert guard.autocompact_enabled(cwd) is False
@@ -262,11 +228,10 @@ def main() -> int:
         tmp = Path(raw)
         check_marks()
         check_decide()
-        check_ceiling(tmp)
         check_window(tmp)
         check_usage(tmp)
         check_end_to_end(tmp)
-    print("context-guard: 6 checks passed")
+    print("context-guard: 5 checks passed")
     return 0
 
 

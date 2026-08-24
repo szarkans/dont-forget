@@ -41,11 +41,12 @@ CRITICAL_MARGIN = 50_000
 # Absolute marks for context rot. Unreachable on a 200k window, which is correct — that
 # session ends long before quality drifts this far.
 ROT_MARKS = (500_000, 900_000)
-# A 1M rung would put Sonnet 5's reserve boundary at its ~967k default compact point,
-# too late for a nudge; use that documented compact point as its checkpoint instead.
-SONNET_5_CHECKPOINT = 967_000
-# Unknown models keep the full fallback ladder. Known models use documented family rungs.
-CEILING_LADDER = (200_000, 500_000, 1_000_000)
+# Window assumed when nothing is configured. Claude Code's compact point follows
+# autoCompactWindow when it is set; with nothing set, assume a large modern window rather
+# than guess one per model — a per-model guess goes stale with every release (opus-4-8 ran
+# with a ≥600k window and no "[1m]" suffix, yet the old ladder capped it at 200k and fired
+# compact warnings mid-session).
+DEFAULT_WINDOW = 1_000_000
 # The range Claude Code itself accepts for autoCompactWindow; a value outside it is ignored.
 WINDOW_MIN, WINDOW_MAX = 100_000, 1_000_000
 
@@ -195,50 +196,19 @@ def configured_window(cwd: Path) -> int | None:
     return None
 
 
-def model_ceiling(cwd: Path, model: str | None, used: int, state_path: Path | None = None) -> int:
-    """The next model-family checkpoint, corrected by suffix evidence and observation.
+def resolve_window(cwd: Path) -> int:
+    """The window Claude Code compacts against: the configured autoCompactWindow when set,
+    else a large default.
 
-    lastModelUsage keeps model ids *with* the "[1m]" suffix the transcript drops, keyed by
-    working directory, and it is a record of what actually ran rather than what is
-    configured — so it survives the user clearing `settings.model` back to the default.
-    For model families with both window variants, both keys present keeps the 200k first
-    checkpoint while a suffix-only key skips directly to 1M.
-
-    With no readable model id the full ladder preserves the old conservative fallback.
-    Whatever the checkpoints, observed usage advances to the smallest rung that can hold
-    it.
+    Trusting the setting over a per-model guess is deliberate. The old guess clamped the
+    configured value by a model-family ceiling, and that ceiling put opus-4-8 at 200k —
+    firing compact warnings from ~125k on a session whose real window was 600k. A setting
+    the user chose beats a model table that goes stale every release, and on current
+    accounts an unset window already defaults to 1M, so the fallback matches reality. The
+    cost is known: a genuinely smaller window run under a larger setting loses the compact
+    nudge entirely — the offset marks sit past its real compact point and never fire.
     """
-    rungs = CEILING_LADDER
-    if model:
-        model_id = model.lower()
-        if "haiku" in model_id:
-            rungs = CEILING_LADDER[:1]
-        elif "fable" in model_id or "mythos" in model_id:
-            rungs = CEILING_LADDER[-1:]
-        elif "sonnet-5" in model_id:
-            rungs = (SONNET_5_CHECKPOINT,)
-        else:
-            rungs = (CEILING_LADDER[0], CEILING_LADDER[-1])
-            state = read_json(state_path or Path.home() / ".claude.json")
-            if isinstance(state, dict):
-                projects = state.get("projects")
-                entry = projects.get(str(cwd)) if isinstance(projects, dict) else None
-                usage = entry.get("lastModelUsage") if isinstance(entry, dict) else None
-                if (isinstance(usage, dict) and f"{model}[1m]" in usage
-                        and model not in usage):
-                    rungs = CEILING_LADDER[-1:]
-    for rung in rungs:
-        if used <= rung:
-            return rung
-    return rungs[-1]
-
-
-def resolve_window(cwd: Path, model: str | None, used: int, state_path: Path | None = None) -> int:
-    """A configured value is a ceiling *request*: the window in force is the smaller of
-    it and the model's own, which is why a 600k setting on a 200k model compacts at 167k."""
-    ceiling = model_ceiling(cwd, model, used, state_path)
-    configured = configured_window(cwd)
-    return min(configured, ceiling) if configured else ceiling
+    return configured_window(cwd) or DEFAULT_WINDOW
 
 
 def marks(window: int, compact_marks: bool) -> list[tuple[str, int]]:
@@ -369,14 +339,14 @@ def main() -> int:
     transcript = payload.get("transcript_path")
     if not transcript or not Path(transcript).is_file():
         return 0
-    used, model = last_usage(Path(transcript))
+    used, _ = last_usage(Path(transcript))
     if used is None:
         # Not zero. A silent zero is what hid this whole mechanism being broken before.
         log("?", None, "no-usage")
         return 0
 
     cwd = Path(payload.get("cwd") or Path.cwd())
-    window = resolve_window(cwd, model, used)
+    window = resolve_window(cwd)
     compact_marks = autocompact_enabled(cwd)
     session = str(payload.get("session_id") or "unknown")
 
