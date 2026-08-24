@@ -25,7 +25,8 @@ model: inherit
 
 - [ ] Use the note role that best represents its function: `atom`, `molecule`,
   `source`, `session`, or `moc`. The filename is `Atom — <complete claim>.md`; keep
-  `#`, `.`, and `/` out of its stem.
+  `#` and `/` out of its stem. A `.` is fine — a claim like `bash 3.2` or `search.py`
+  keeps it.
 
 - [ ] Express a decision as: "in context X, facing Y, chose Z and rejected W",
   followed by `Because:` and `Fails-when:`.

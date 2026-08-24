@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.1 — 2026-08-24
+
+### Fixed
+- The `this` skill no longer tells you to keep `.` out of a note's filename stem. The
+  write path stopped rejecting dots back in 0.6.1, so a claim like `bash 3.2` or
+  `search.py` keeps its dot — the instruction had just lagged the code. `#` and `/` are
+  still out (the writer rejects them). No action needed after upgrading.
+
 ## 0.8.0 — 2026-08-24
 
 ### What we did
