@@ -65,7 +65,9 @@ with tempfile.TemporaryDirectory() as tmp:
     home = Path(tmp)
     vault = home / "vault"
     vault.mkdir()
-    (vault / "note.md").write_text("# Note\n\nfreshnessalpha\n")
+    (vault / "note.md").write_text(
+        "---\ntype: atom\ndate: 2026-08-10\nreviewed: 2026-08-20\n"
+        "dies-when: DNS record repointed\n---\n\n# Note\n\nfreshnessalpha\n")
     config_dir = home / ".dont-forget"
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps({"vault": str(vault)}))
@@ -77,7 +79,15 @@ with tempfile.TemporaryDirectory() as tmp:
         env=env, capture_output=True, text=True, check=True,
     )
     assert (config_dir / "index.db").is_file()
-    assert json.loads(first.stdout)["coverage"]["matched_chunks"] == 1
+    first_result = json.loads(first.stdout)
+    assert first_result["coverage"]["matched_chunks"] == 1
+    # A fragment must carry its note's freshness fields so a reader can tell a fresh
+    # observation from a standing rule, and see a named expiry that lives in
+    # frontmatter rather than in the matched chunk.
+    fragment = first_result["fragments"][0]
+    assert fragment["type"] == "atom" and fragment["date"] == "2026-08-10", fragment
+    assert fragment["reviewed"] == "2026-08-20", fragment
+    assert fragment["dies_when"] == "DNS record repointed", fragment
     query_log = config_dir / "queries.jsonl"
     log_lines_before = 0
     if query_log.is_file():

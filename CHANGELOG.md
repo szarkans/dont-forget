@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.8.0 — 2026-08-24
+
+### What we did
+Notes now travel with their freshness and search shows it: every fragment carries the
+note's `type`, `date`, `reviewed`, and an optional `dies-when` expiry, and recall states
+a stale-able observation as "valid as of that date, not re-verified" instead of quoting
+it like a permanent rule.
+
+### How
+`search.py` returns the four fields on every fragment — `dies-when` rides in frontmatter,
+so it reaches the reader even when the matched paragraph is not the one holding it;
+`about` weighs them, reads age as the later of `date`/`reviewed`, and treats a newer note
+linking back to an older one as a possible correction over the incoming-link walk search
+already does; `this` invites a `dies-when:` field only when the author can name what ends
+the claim.
+
+### Why
+A note that died when an external fact changed under it — a repointed DNS record, a
+bumped version — used to come back byte-identical and indistinguishable from a live one,
+and a dead note read as current is worse than a missing one.
+
+### Other info
+A signal, not a lifecycle system: no typed expiry, no supersession graph, no `checkup`
+condition-checking, by design. Upgrading rebuilds the index once to add the `dies_when`
+column. Closes #7, #8, #9, #11.
+
 ## 0.7.2 — 2026-08-24
 
 ### Fixed

@@ -36,6 +36,13 @@ model: inherit
 - [ ] Give a fact or insight a claim-title, a BLUF, and supporting evidence.
 - [ ] Add `kind:` only for `decision`, `gotcha`, `principle`, `pain`, or `stance`;
   facts and insights do not receive it.
+- [ ] Ask once of every note: can this claim become false while the note stays
+  unchanged, because some external fact shifts under it — a DNS record, a version, a
+  price, a one-off measurement? If yes, add a `dies-when:` frontmatter field naming
+  that event (`dies-when: DNS record for the bridge is repointed`). If no — a
+  permanent rule — omit it; do not invent a condition to fill the slot. It rides in
+  frontmatter, not the body, so search surfaces it on every fragment of the note
+  rather than only when its paragraph happens to match.
 
 - [ ] Every vault note needs YAML frontmatter. Include `type` from the five roles,
   creation `date`, `tags` with the type repeated as the first tag, and `source`
