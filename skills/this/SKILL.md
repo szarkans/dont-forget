@@ -44,7 +44,7 @@ model: inherit
 
 ## Preserve the knowledge graph
 
-- [ ] Run `python3 scripts/search.py "<the substance of the claim>"` for every
+- [ ] Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<the substance of the claim>"` for every
   proposed claim and inspect its JSON fragments and paths. If an existing note
   already covers the claim, offer to update that note instead of creating another;
   do not silently choose for the user.
@@ -52,6 +52,6 @@ model: inherit
   least one link to an appropriate MOC so no note is orphaned. Put links in prose,
   never inside code blocks.
 - [ ] Write vault notes only by sending the complete filename and Markdown content
-  JSON to `python3 scripts/vault-write.py`. On `exists-same`, report that the note
+  JSON to `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"`. On `exists-same`, report that the note
   was already present. On `conflict`, stop and tell the user; never replace or
   reconcile the content on your own.

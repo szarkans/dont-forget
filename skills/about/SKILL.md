@@ -12,7 +12,7 @@ within a byte budget, so do not duplicate that logic manually.
 
 ## Search
 
-From the plugin root, run `python3 scripts/search.py "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
 call, never split the question into several searches: that distorts ranking and coverage.
 
 The query argument is a search query you compose, not the user's sentence. Pick 3-8

@@ -13,8 +13,8 @@ Capture the useful state of the conversation. Open threads live only in the note
 - [ ] Draft frontmatter with `type: session`, `date`, and `tags`, with `session` as the first tag. Add `project` when known.
 - [ ] Write `# Session — YYYY-MM-DD <short topic>` followed by `## Done`, `## Decisions`, and `## Next steps / pending`.
 - [ ] Put every unfinished thread only in `## Next steps / pending`, as an unchecked `- [ ]` item. Describe the stopping point, why work stopped, and what was already tried; do not merely restate the task name.
-- [ ] Add `## Links` with the most relevant MOC wikilink. Use `python3 scripts/search.py "<topic or project>"` when the right MOC is not evident from context.
-- [ ] Write the note only through `python3 scripts/vault-write.py`. Send JSON with `filename` and `content`; do not write the vault file directly.
+- [ ] Add `## Links` with the most relevant MOC wikilink. Use `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<topic or project>"` when the right MOC is not evident from context.
+- [ ] Write the note only through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"`. Send JSON with `filename` and `content`; do not write the vault file directly.
 - [ ] If the same filename already exists, read it and offer an update through `vault-write.py` with `action: "replace"` and `expected_sha` equal to the SHA-256 of the current bytes. If replacement returns `conflict`, stop and tell the user; never resolve it silently.
 - [ ] Report the note name, open-thread count, exactly what entered the index, and anything that remains unsaved.
 

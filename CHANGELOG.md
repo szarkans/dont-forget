@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.1 — 2026-08-24
+
+### Fixed
+- Skills now invoke their scripts by an absolute `${CLAUDE_PLUGIN_ROOT}/scripts/…`
+  path instead of a bare `scripts/…` relative to "the plugin root". A skill runs in
+  the user's project directory, so the relative path did not exist there and the agent
+  had to hunt for the script by hand. No action needed after upgrading.
+
 ## 0.7.0 — 2026-08-23
 
 ### Added

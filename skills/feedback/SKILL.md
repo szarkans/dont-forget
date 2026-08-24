@@ -13,7 +13,7 @@ Record only facts that are mechanically proven in the current session. This is a
 - [ ] Log `proven-miss` when search returned nothing and the same session later found the note through `this` deduplication or a differently worded query.
 - [ ] Log `saved-work` when a search result demonstrably avoided repeated work.
 - [ ] Do not log a suspicion that the vault probably contains something. The whole vault is not visible, so that is not proof.
-- [ ] Send one JSON object to `python3 scripts/feedback-log.py` with `verdict`, non-empty `query`, `notes` as a list of returned-note strings, and `note` as one line describing what happened.
+- [ ] Send one JSON object to `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"` with `verdict`, non-empty `query`, `notes` as a list of returned-note strings, and `note` as one line describing what happened.
 - [ ] Use only these verdicts: `saved-work`, `noise`, `false-note`, or `proven-miss`.
 - [ ] The script answers with the running `proven_misses` count. When it also returns a
   `trigger` field, show that line to the user: it is the agreed signal that full-text

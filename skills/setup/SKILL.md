@@ -10,7 +10,7 @@ This plugin remembers by reading and writing plain Markdown files in one folder.
 is the single question of which folder that is. Everything else — the index, the logs —
 is disposable and rebuilds itself, so nothing here is a decision the user has to live with.
 
-Start with `python3 scripts/setup.py --detect` from the plugin root. It reports what is
+Start with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" --detect`. It reports what is
 configured now, what went wrong if anything, and every vault it found. Do not ask the
 user to type a path before running it: the whole point is that they usually do not have to.
 
@@ -44,7 +44,7 @@ Re-running setup is not a reason to change anything.
 
 ## Applying
 
-`python3 scripts/setup.py --set <path>` writes the config and builds the first index in
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" --set <path>` writes the config and builds the first index in
 one step. It reports the note, chunk and link counts it indexed — pass those on, because
 they are the first evidence that the plugin can actually see the notes. Zero notes on a
 folder the user believed was full means the wrong folder was chosen; say so rather than
