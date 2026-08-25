@@ -37,6 +37,20 @@ def atomic_write(target: Path, data: bytes) -> None:
             temporary.unlink()
 
 
+def validate_frontmatter(content: str) -> None:
+    """Refuse a note whose frontmatter is opened but never closed.
+
+    index.py's parser treats an unterminated `---` block as no frontmatter at all
+    and silently drops every field (type, date, dies-when, reviewed). Catch it on
+    the write path so the metadata loss surfaces as an error, not a quiet miss.
+    """
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return
+    if not any(line.strip() == "---" for line in lines[1:]):
+        raise ValueError("frontmatter opened with '---' but never closed")
+
+
 def validate_filename(filename: object) -> str:
     if not isinstance(filename, str) or not filename:
         raise ValueError("filename must be a non-empty string")
@@ -82,6 +96,7 @@ def main() -> None:
         content = payload.get("content")
         if not isinstance(content, str):
             raise ValueError("content must be a string")
+        validate_frontmatter(content)
         action = payload.get("action", "create")
         if action not in ("create", "replace"):
             raise ValueError("action must be create or replace")

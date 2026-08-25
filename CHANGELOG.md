@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.2 — 2026-08-25
+
+### Fixed
+- `vault-write.py` now refuses a note whose frontmatter opens with `---` but is never
+  closed. The indexer treated an unterminated block as no frontmatter at all and
+  silently dropped every field (`type`, `date`, `dies-when`, `reviewed`) — the freshness
+  signal shipped in 0.8.0 would just vanish, with no error anywhere. The write path
+  catches it up front now. If a note already lost its metadata this way, add the closing
+  `---` and reindex.
+
 ## 0.8.1 — 2026-08-24
 
 ### Fixed

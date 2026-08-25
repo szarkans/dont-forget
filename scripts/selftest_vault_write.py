@@ -69,4 +69,13 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert dotted.returncode == 0, dotted.stderr
     assert (vault / "Atom — v1.2 broke.md").read_text(encoding="utf-8") == "dotted name content"
 
+    before = set(vault.iterdir())
+    unclosed = invoke(vault, "Atom — unclosed.md", "---\ntype: atom\nbody with no closing fence\n")
+    assert unclosed.returncode != 0
+    assert "frontmatter" in unclosed.stderr
+    assert set(vault.iterdir()) == before
+
+    closed = invoke(vault, "Atom — closed.md", "---\ntype: atom\n---\nbody\n")
+    assert closed.returncode == 0, closed.stderr
+
 print("ok")
