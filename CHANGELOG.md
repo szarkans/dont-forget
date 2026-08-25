@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.8.3 — 2026-08-26
+
+### Changed
+- The autocompact Stop-hook speaks later now. Its warn nudge used to fire ~150k tokens
+  before the compact point (or a quarter of the run-up, whichever was smaller) — on a
+  600k window that landed around 425k, early enough to feel pushy. The default distance
+  is now 80k, so the same window warns near 487k instead. The critical mark and the
+  context-rot marks are unchanged.
+
+### Added
+- `autocompact_warn_margin` in `~/.dont-forget/config.json` sets that warn distance
+  yourself — the token headroom you want before Claude Code auto-compacts. It must be
+  above 50k (the critical margin) or it is ignored and the 80k default stands.
+
+### Fixed
+- `checkup` flags notes stranded on a small island cut off from the rest of the graph,
+  not just notes with zero links. A cluster that links only itself used to read as
+  healthy; it is surfaced as unreachable now.
+
 ## 0.8.2 — 2026-08-25
 
 ### Fixed

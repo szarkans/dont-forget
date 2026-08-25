@@ -33,10 +33,12 @@ from common import CONFIG_PATH, HOME_DIR
 # Room Claude Code reserves before compacting: min(max_output, 20k) + 13k safety.
 # Measured against compactMetadata.preTokens on 44 auto-compacts; see the module docstring.
 COMPACT_RESERVE = 33_000
-# Distance from the compact point at which each compact mark speaks. Generous on purpose:
-# `review --full` audits, saves facts, writes the note and commits, and the user wants
-# room left over to keep working afterwards rather than to stop dead at the save.
-WARN_MARGIN = 150_000
+# Default distance from the compact point at which compact-warn speaks; overridable per
+# machine with the `autocompact_warn_margin` config key. 80k leaves room to run
+# `review --full` (audit, save facts, write the note, commit) and keep working, without
+# firing so early the session has barely begun. It clears CRITICAL_MARGIN so the two
+# compact marks never invert.
+WARN_MARGIN = 80_000
 CRITICAL_MARGIN = 50_000
 # Absolute marks for context rot. Unreachable on a 200k window, which is correct — that
 # session ends long before quality drifts this far.
@@ -65,8 +67,8 @@ def read_json(path: Path):
         return None
 
 
-def config_flags() -> tuple[bool, bool]:
-    """(speak at all, act without asking).
+def config_flags() -> tuple[bool, bool, int]:
+    """(speak at all, act without asking, compact-warn margin).
 
     The first is opt-out: a nudge that ships switched off is a nudge nobody has. But a
     hook that blocks Stop is intrusive enough to deserve a documented off switch.
@@ -80,9 +82,21 @@ def config_flags() -> tuple[bool, bool]:
     """
     config = read_json(CONFIG_PATH)
     if not isinstance(config, dict) or not config.get("vault"):
-        return False, False
+        return False, False, WARN_MARGIN
     return (config.get("autocompact_nudge", True) is not False,
-            config.get("autocompact_autosave", False) is True)
+            config.get("autocompact_autosave", False) is True,
+            warn_margin_from(config.get("autocompact_warn_margin")))
+
+
+def warn_margin_from(value) -> int:
+    """The compact-warn distance, config override or default. It must clear the critical
+    margin — a smaller one would put warn *after* critical and invert the two — so anything
+    at or below CRITICAL_MARGIN, or not a plain number, falls back to the default. A value
+    larger than the window can hold is harmless: the point//4 clamp in marks() caps it."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return WARN_MARGIN
+    number = int(value)
+    return number if number > CRITICAL_MARGIN else WARN_MARGIN
 
 
 def tail_lines(path: Path, chunk: int = 1 << 16):
@@ -211,7 +225,7 @@ def resolve_window(cwd: Path) -> int:
     return configured_window(cwd) or DEFAULT_WINDOW
 
 
-def marks(window: int, compact_marks: bool) -> list[tuple[str, int]]:
+def marks(window: int, compact_marks: bool, warn_margin: int = WARN_MARGIN) -> list[tuple[str, int]]:
     """Every threshold this session can cross, as (name, tokens), lowest first.
 
     Compact margins are clamped by a share of the run-up so they cannot invert or swallow
@@ -222,7 +236,7 @@ def marks(window: int, compact_marks: bool) -> list[tuple[str, int]]:
     if compact_marks:
         point = max(1, window - COMPACT_RESERVE)
         critical = min(CRITICAL_MARGIN, max(1, point // 10))
-        warn = min(WARN_MARGIN, max(critical + 1, point // 4))
+        warn = min(warn_margin, max(critical + 1, point // 4))
         found += [("compact-warn", point - warn), ("compact-critical", point - critical)]
     return sorted(((name, level) for name, level in found if level > 0),
                   key=lambda mark: mark[1])
@@ -298,7 +312,8 @@ def log(used, window, fired: str) -> None:
         pass
 
 
-def decide(used: int, window: int, already: list, compact_marks: bool) -> tuple[str | None, list]:
+def decide(used: int, window: int, already: list, compact_marks: bool,
+           warn_margin: int = WARN_MARGIN) -> tuple[str | None, list]:
     """The highest crossed mark that has not spoken yet, plus the marks now spent.
 
     Only one message per stop: a resumed session, or one very large turn, can cross two
@@ -313,7 +328,7 @@ def decide(used: int, window: int, already: list, compact_marks: bool) -> tuple[
     window: a share sits *above* the first mark on a wide window (450k against a warn at
     425k on a 600k one), so every stop in between would clear the record and speak again.
     """
-    levels = marks(window, compact_marks)
+    levels = marks(window, compact_marks, warn_margin)
     if not levels:
         return None, []
     if used < levels[0][1]:
@@ -332,7 +347,7 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict) or payload.get("stop_hook_active"):
         return 0
-    enabled, autosave = config_flags()
+    enabled, autosave, warn_margin = config_flags()
     if not enabled:
         return 0
 
@@ -353,7 +368,7 @@ def main() -> int:
     state = load_state()
     already = state.get(session)
     already = already if isinstance(already, list) else []
-    name, spent = decide(used, window, already, compact_marks)
+    name, spent = decide(used, window, already, compact_marks, warn_margin)
     # Re-insert rather than assign: the trim in save_state keeps the last STATE_KEEP keys
     # by insertion order, and updating a key in place does not move it. Without this a
     # long session is evicted by twenty short ones and every mark speaks a second time.

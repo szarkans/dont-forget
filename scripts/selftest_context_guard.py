@@ -42,11 +42,21 @@ def check_marks() -> None:
     compaction actually happens, so it could never fire."""
     named = dict(guard.marks(600_000, True))
     point = 600_000 - guard.COMPACT_RESERVE
-    # The quarter clamp bites even here: a 567k run-up caps the warn margin at 141.75k.
-    assert named["compact-warn"] == point - min(150_000, point // 4), named
+    # The 80k default clears the quarter clamp (141k) here, so the margin is the flat 80k.
+    assert named["compact-warn"] == point - guard.WARN_MARGIN, named
     assert named["compact-critical"] == point - 50_000, named
     assert named["compact-critical"] < point, "critical mark must sit before the compaction"
     assert named["compact-warn"] < named["compact-critical"]
+
+    # The warn distance is configurable. A larger margin moves the mark earlier; a value at
+    # or below the critical margin (or not a number) would invert the marks, so it is refused.
+    wide = dict(guard.marks(600_000, True, 120_000))
+    assert wide["compact-warn"] == point - 120_000, wide
+    assert guard.warn_margin_from(120_000) == 120_000
+    assert guard.warn_margin_from(50_000) == guard.WARN_MARGIN   # not above critical -> default
+    assert guard.warn_margin_from(0) == guard.WARN_MARGIN
+    assert guard.warn_margin_from("80000") == guard.WARN_MARGIN
+    assert guard.warn_margin_from(True) == guard.WARN_MARGIN
 
     small = dict(guard.marks(200_000, True))
     point_small = 200_000 - guard.COMPACT_RESERVE
@@ -64,13 +74,13 @@ def check_marks() -> None:
 
 def check_decide() -> None:
     """One message per stop, each mark spends once, everything re-arms after a compaction."""
-    window = 600_000
-    name, spent = guard.decide(430_000, window, [], True)
+    window = 600_000   # compact point 567k -> warn at 487k, critical at 517k, rot at 500k
+    name, spent = guard.decide(490_000, window, [], True)
     assert name == "compact-warn", name
-    # Crossing again says nothing new.
-    quiet, spent = guard.decide(440_000, window, spent, True)
+    # Crossing again says nothing new (still below the rot mark at 500k).
+    quiet, spent = guard.decide(495_000, window, spent, True)
     assert quiet is None, quiet
-    # Two marks crossed at once: the higher one speaks, the quieter is spent silently.
+    # Several marks crossed at once: the highest one speaks, the quieter are spent silently.
     name, spent = guard.decide(560_000, window, spent, True)
     assert name == "compact-critical", name
     assert "rot-500000" in spent, spent
@@ -79,10 +89,10 @@ def check_decide() -> None:
     # A compaction drops usage; every mark re-arms, or the second compaction passes mute.
     name, spent = guard.decide(20_000, window, spent, True)
     assert name is None and spent == [], (name, spent)
-    assert guard.decide(430_000, window, spent, True)[0] == "compact-warn"
+    assert guard.decide(490_000, window, spent, True)[0] == "compact-warn"
 
     # With autocompact off only the rot scale can speak.
-    name, _ = guard.decide(430_000, window, [], False)
+    name, _ = guard.decide(490_000, window, [], False)
     assert name is None, name
     assert guard.decide(520_000, window, [], False)[0] == "rot-500000"
 
@@ -161,7 +171,7 @@ def check_end_to_end(tmp: Path) -> None:
                                               encoding="utf-8")
     cwd = tmp / "proj"
     cwd.mkdir(exist_ok=True)
-    path = transcript(tmp / "live.jsonl", [assistant(430_000)])
+    path = transcript(tmp / "live.jsonl", [assistant(490_000)])
     payload = {"session_id": "s1", "transcript_path": str(path), "cwd": str(cwd),
                "stop_hook_active": False}
 
@@ -190,6 +200,13 @@ def check_end_to_end(tmp: Path) -> None:
 
     # stop_hook_active is Claude Code saying it is already replying to our block.
     assert run_hook(home, config_dir, {**payload, "stop_hook_active": True}) == ""
+
+    # The warn distance threads through from config: a smaller margin pushes the mark later,
+    # so the same 490k that blocked by default now stays quiet (warn moves to 507k).
+    config.write_text(json.dumps({"vault": str(vault), "autocompact_warn_margin": 60_000}),
+                      encoding="utf-8")
+    assert run_hook(home, config_dir, {**payload, "session_id": "s-margin"}) == ""
+    config.write_text(json.dumps({"vault": str(vault)}), encoding="utf-8")
 
     # Opted out in config.
     config.write_text(json.dumps({"vault": str(vault), "autocompact_nudge": False}),
