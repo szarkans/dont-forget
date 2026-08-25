@@ -47,6 +47,39 @@ def feedback_summary(path, now=None):
     return {"last_7_days": recent, "total": totals}
 
 
+def find_islands(con):
+    """Note groups severed from the main graph body, biggest island first.
+
+    A degree-0 note (today's "orphan") is just an island of one; a cluster like
+    CatCraft MOC — notes that link to each other but to nothing in the main body —
+    is an island of two or more. The old EXISTS check only saw the size-1 case,
+    so it walked straight past every multi-note island. Union-find over resolved
+    links finds every connected component; the largest is home, the rest are islands.
+    """
+    parent = {row[0]: row[0] for row in con.execute("SELECT id FROM notes")}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for src, dst in con.execute(
+        "SELECT src_note_id, dst_note_id_or_null FROM links WHERE dst_note_id_or_null IS NOT NULL"
+    ):
+        if src in parent and dst in parent:
+            parent[find(src)] = find(dst)
+    members = {}
+    for note_id, title, path in con.execute("SELECT id, title, path FROM notes"):
+        members.setdefault(find(note_id), []).append({"title": title, "path": path})
+    components = sorted(members.values(), key=len, reverse=True)
+    islands = components[1:]  # drop the main body; everything else is cut off from it
+    for island in islands:
+        island.sort(key=lambda m: (m["title"], m["path"]))
+    islands.sort(key=lambda i: (-len(i), i[0]["title"] if i else ""))
+    return islands
+
+
 def report(db_path, stale_days=STALE_DAYS, feedback_path=DEFAULT_FEEDBACK):
     con = connect_ro(db_path)
     con.row_factory = sqlite3.Row
@@ -59,11 +92,7 @@ def report(db_path, stale_days=STALE_DAYS, feedback_path=DEFAULT_FEEDBACK):
         "chunks": con.execute("SELECT count(*) FROM chunks").fetchone()[0],
         "links": con.execute("SELECT count(*) FROM links").fetchone()[0],
     }
-    orphan_rows = con.execute("""
-        SELECT title, path FROM notes n WHERE NOT EXISTS
-        (SELECT 1 FROM links l WHERE l.src_note_id=n.id OR l.dst_note_id_or_null=n.id)
-        ORDER BY title, path
-    """).fetchall()
+    islands = find_islands(con)
     broken_rows = con.execute("""
         SELECT n.title AS src_title, l.dst_name FROM links l
         JOIN notes n ON n.id=l.src_note_id WHERE l.dst_note_id_or_null IS NULL
@@ -82,7 +111,8 @@ def report(db_path, stale_days=STALE_DAYS, feedback_path=DEFAULT_FEEDBACK):
                 stale.append({"title": row["title"], "path": row["path"], "age_days": age})
     result = {
         "totals": totals,
-        "orphans": {"count": len(orphan_rows), "items": [dict(r) for r in orphan_rows[:LIMIT]]},
+        "islands": {"count": len(islands), "notes": sum(len(i) for i in islands),
+                    "items": [{"size": len(i), "members": i} for i in islands[:LIMIT]]},
         "broken_links": {"count": len(broken_rows), "items": [dict(r) for r in broken_rows[:LIMIT]]},
         "stale": {"count": len(stale), "stale_days": stale_days, "items": stale[:LIMIT]},
         "feedback": feedback_summary(feedback_path),

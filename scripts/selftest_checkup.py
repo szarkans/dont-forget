@@ -27,18 +27,29 @@ with tempfile.TemporaryDirectory() as tmp:
         (2, "orphan.md", "Orphan", "note", "", "", "", 0, "b"),
         (3, "broken.md", "Broken", "note", "", "", "", 0, "c"),
         (4, "stale.md", "Stale", "source", "", old, "", 0, "d"),
+        (5, "islanda.md", "Island A", "note", "", "", "", 0, "e"),
+        (6, "islandb.md", "Island B", "note", "", "", "", 0, "f"),
+        (7, "hub.md", "Hub", "note", "", "", "", 0, "g"),
     ]
     con.executemany("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?)", notes)
     con.executemany("INSERT INTO chunks VALUES(?,?,?,?,?)", [(1, 1, "", "one", 0), (2, 4, "", "two", 0)])
-    con.executemany("INSERT INTO links VALUES(?,?,?)", [(1, "Stale", 4), (3, "Missing", None)])
+    # Main body {1,4,7} is the largest component and counts as home. {5,6} is a two-note
+    # island the old EXISTS check missed; 2 and 3 are lone orphans (3's only link is broken).
+    con.executemany("INSERT INTO links VALUES(?,?,?)",
+                    [(1, "Stale", 4), (3, "Missing", None), (5, "Island B", 6), (7, "Normal", 1)])
     con.commit()
     con.close()
     result = subprocess.run(
         ["python3", str(SCRIPT), "--db", str(db), "--feedback", str(feedback)], check=True, capture_output=True, text=True
     )
     data = json.loads(result.stdout)
-    assert data["totals"] == {"notes_by_type": {"atom": 1, "note": 2, "source": 1}, "notes": 4, "chunks": 2, "links": 2}
-    assert data["orphans"] == {"count": 1, "items": [{"title": "Orphan", "path": "orphan.md"}]}
+    assert data["totals"] == {"notes_by_type": {"atom": 1, "note": 5, "source": 1}, "notes": 7, "chunks": 2, "links": 4}
+    assert data["islands"] == {"count": 3, "notes": 4, "items": [
+        {"size": 2, "members": [{"title": "Island A", "path": "islanda.md"},
+                                {"title": "Island B", "path": "islandb.md"}]},
+        {"size": 1, "members": [{"title": "Broken", "path": "broken.md"}]},
+        {"size": 1, "members": [{"title": "Orphan", "path": "orphan.md"}]},
+    ]}
     assert data["broken_links"] == {"count": 1, "items": [{"src_title": "Broken", "dst_name": "Missing"}]}
     assert data["stale"]["count"] == 1
     assert data["stale"]["items"] == [{"title": "Stale", "path": "stale.md", "age_days": 61}]
