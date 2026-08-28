@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.9.0 — 2026-08-28
+
+### Changed
+- `this` no longer asks which note type to use. Everything it writes is `type: atom`:
+  session notes come from `session`, MOC pages are born from demand, generalisations
+  across several atoms are proposed by a later vault audit, and where the knowledge came
+  from is the `source:` field rather than a type. The choice cost thought on every save
+  and changed the behaviour of no script.
+- Linking a MOC is now conditional on a fitting one already existing. The old rule
+  demanded every note reach a MOC, which pushed the agent into inventing hubs on empty
+  ground — the disconnected page the rule existed to prevent.
+- `this` now says what stays out: knowledge that ships with the tool — a documented flag,
+  a framework default — belongs to its own manual. In the vault it is the worst kind of
+  noise, written in common words so it matches many queries and answers none, while the
+  byte budget drops real fragments to make room for it.
+- Merging into an existing note requires a shared cause, not a shared symptom, and
+  appends a dated case instead of rewriting the wording that is already there. Two
+  deploys broken by skipped migrations are one note; one broken by migrations and one by
+  an out-of-memory kill are two, because merged they become "prod sometimes falls over" —
+  true and useless at the moment it would have to help.
+- `review` and `session` stopped emitting `e2e not verified this session`. It was the
+  single most repeated line in the reference vault (56 of 629 threads) and named neither
+  what was unfinished nor who would finish it. A hanging thread now has to name both, so
+  a later session can act on it.
+- `review` and `session` separate work from knowledge. An item that dies when someone
+  does it is a thread; a fact about how the world is goes to `this` as a note. Threads
+  are shown by freshness and drop off the digest, so a gotcha parked among them was a
+  gotcha thrown away.
+- `checkup` commits the vault by naming the notes this session wrote rather than running
+  `git add -A`. One vault is shared by parallel sessions, and staging everything committed
+  a neighbour's half-written notes under this session's message.
+- `about` reads a `type: session` fragment as a diary entry — how the work was thought
+  about that day, not how things stand now — and prefers a later note when the two
+  disagree. A decision reversed the next morning still sits unchanged in yesterday's diary.
+
+### Added
+- `volatility: hot | warm | cold` on new notes: how fast the claim goes out of date, which
+  is a different question from how important it is. Nothing reads the field yet — it is
+  being collected so that a later audit can ask "still true?" of `hot` notes only instead
+  of the whole vault. The judgement itself gets reviewed at the end of September 2026.
+- `checkup` reports `N uncommitted notes`. Now that it commits named paths, a session that
+  dies mid-close leaves its notes outside Git indefinitely with nothing to sweep them up
+  later; this line is what surfaces them.
+- `about` answers a search that returned nothing with one fixed line —
+  `Nothing in the vault about this.` — before anything else, then continues in the user's
+  language. The wording is fixed so a fixture test can prove that an empty vault produces
+  an admission rather than an invention.
+
 ## 0.8.3 — 2026-08-26
 
 ### Changed

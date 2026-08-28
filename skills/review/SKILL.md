@@ -21,7 +21,9 @@ Use the conversation as evidence and git as the reality check. Do not invent mem
 - [ ] Run `git log --oneline -15` and `git status --short`; never report an action as done when git does not show it.
 - [ ] Report four parts: `Done`, `Missed` memory candidates, `Hanging Threads`, and a score out of 10.
 - [ ] Include a memory candidate only when it is visibly supported by the conversation.
-- [ ] Never run or simulate tests or QA. If none ran, add `e2e not verified this session` as a hanging thread.
+- [ ] Sort each loose end by whether doing something kills it. "Merge PR #41" dies the moment someone merges it — that is a hanging thread. "The RCON password went out in public chat" describes how the world is and no action erases it — that is knowledge, and it belongs in a note through `this`. Threads are shown by freshness and drop off the digest, so a fact parked among them is a fact thrown away.
+- [ ] Make every hanging thread name what is unfinished and who finishes it. This vault's single most repeated line was `e2e not verified this session` — 56 of 629 threads — and it named neither, so no later session could act on it: it was a reflex, not a finding. Write the actionable version instead: "the release checklist in PR #41 has not been run against prod — user runs it".
+- [ ] Never run or simulate tests or QA. Report plainly which checks actually ran and which did not, and leave it at that unless something specific remains for someone to do.
 
 ## Full mode
 
