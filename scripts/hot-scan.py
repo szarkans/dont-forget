@@ -12,7 +12,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from common import DEFAULT_DB, connect_ro
-from index import refresh_index
+from index import refresh_index, strip_fences
 
 # An unticked box in a session note is an unfinished thread, wherever it sits. Matching
 # a list of heading names instead used to lose real tails two ways: a heading nobody
@@ -54,15 +54,23 @@ def normalize(name: str) -> str:
 
 
 def same_project(note_project: str, project: str) -> bool:
-    """Match loosely: vault notes spell one project many ways — acme, acme-corp, ACME Corp."""
+    """One project, one name — once case and separators are normalised away.
+
+    Matching on a shared prefix leaks badly, measured on a live vault of 894 notes: a
+    short client name is a prefix of every repository named after that client, so working
+    in acme-transenergo-epl-server pulled in all 259 notes filed under acme, and 83% of
+    that digest was another project's work. The same measurement showed the loose match
+    was not buying anything back: every spelling of one project that really did occur
+    (ACME Corp against acme-corp, Catcraft against catcraft) differs by case or separator
+    only, which normalising already folds. Every pair the prefix rule matched and
+    normalising does not was a pair of genuinely different projects.
+
+    A project that really does want a neighbour's notes (a dev environment, a wiki repo)
+    needs an explicit alias, not a rule that guesses from spelling.
+    """
     note_project = normalize(note_project or "")
     project = normalize(project or "")
-    if not note_project or not project:
-        return False
-    if note_project == project:
-        return True
-    shorter, longer = sorted((note_project, project), key=len)
-    return longer.startswith(shorter + "-")
+    return bool(note_project) and note_project == project
 
 
 def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
@@ -84,9 +92,17 @@ def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
     except sqlite3.Error:
         return []
 
+    # Chunks are pieces of a note, so a code fence can open in one and close in another.
+    # Rejoining the note before stripping keeps the fence state whole; scanning chunk by
+    # chunk would let the tail of a split code block through as if it were a real task.
+    notes: dict[str, list] = {}
+    for path, note_project, body in rows:
+        entry = notes.setdefault(path, [note_project, []])
+        entry[1].append(body)
+
     tails = []
     no_project_tails = []
-    for path, note_project, body in rows:
+    for path, (note_project, bodies) in notes.items():
         if project:
             if note_project and not same_project(note_project, project):
                 continue
@@ -94,7 +110,7 @@ def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
         else:
             destination = tails
         session_name = Path(path).stem.removeprefix("Session — ")
-        for match in OPEN_ITEM.finditer(body):
+        for match in OPEN_ITEM.finditer(strip_fences("\n".join(bodies))):
             item = " ".join(match.group(0).strip()[2:].split())
             if len(item) > MAX_ITEM_CHARS:
                 item = item[: MAX_ITEM_CHARS - 1] + "…"

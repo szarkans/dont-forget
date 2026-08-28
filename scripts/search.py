@@ -307,13 +307,17 @@ def main() -> None:
         result["coverage"]["index_stale"] = True
     if args.vault is None and args.db is None:
         try:
-            top: list[str] = []
+            # Each entry records how the note arrived: matched the query text, or came in
+            # by following a link. Without that tag a pair of notes that always surface
+            # together cannot be told apart from two notes the graph walk always drags in
+            # behind each other, and every co-retrieval conclusion rests on the difference.
+            top: list[dict] = []
             seen: set[str] = set()
             for fragment in result["fragments"]:
                 path = fragment.get("path")
                 if path not in seen:
                     seen.add(path)
-                    top.append(path)
+                    top.append({"path": path, "found_by": fragment.get("found_by")})
                 if len(top) >= 5:
                     break
             DEFAULT_QUERY_LOG.parent.mkdir(parents=True, exist_ok=True)

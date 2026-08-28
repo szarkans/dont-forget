@@ -50,7 +50,12 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return data, "".join(lines[end + 1 :])
 
 
-def extract_links(body: str) -> list[str]:
+def strip_fences(body: str) -> str:
+    """Drop fenced code blocks: text inside them is an example, not a claim.
+
+    A note that documents "open threads are written like this: - [ ] do X" must not
+    hand that example to a reader as a live link or a live task.
+    """
     visible, fence = [], None
     for line in body.splitlines():
         marker = FENCE.match(line)
@@ -63,8 +68,12 @@ def extract_links(body: str) -> list[str]:
             continue
         if fence is None:
             visible.append(line)
+    return "\n".join(visible)
+
+
+def extract_links(body: str) -> list[str]:
     targets = []
-    for match in WIKILINK.finditer("\n".join(visible)):
+    for match in WIKILINK.finditer(strip_fences(body)):
         target = match.group(1).split("|", 1)[0].split("#", 1)[0].strip()
         if target:
             targets.append(target)

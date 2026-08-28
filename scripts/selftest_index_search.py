@@ -101,11 +101,21 @@ with tempfile.TemporaryDirectory() as tmp:
         log_lines_after = sum(1 for _ in handle)
     assert log_lines_after == log_lines_before
     (vault / "note.md").write_text("# Note\n\nfreshnessbeta\n")
+    # A neighbour that shares no query word: it can only arrive by following the link.
+    (vault / "neighbour.md").write_text("# Neighbour\n\nSee [[note]] for the details.\n")
     second = subprocess.run(
         [sys.executable, str(search_script), "freshnessbeta"],
         env=env, capture_output=True, text=True, check=True,
     )
     assert json.loads(second.stdout)["coverage"]["matched_chunks"] == 1
+
+    # The log has to say how each note arrived. Without that tag two notes the graph walk
+    # always drags in behind each other look exactly like two notes that genuinely answer
+    # the same questions, and every co-retrieval conclusion rests on telling them apart.
+    with query_log.open(encoding="utf-8") as handle:
+        logged = json.loads(handle.readlines()[-1])
+    assert [entry["path"] for entry in logged["top"]] == ["note.md", "neighbour.md"], logged
+    assert [entry["found_by"] for entry in logged["top"]] == ["text", "link"], logged
 
 # An unchanged note must stop at stat: reading every note just to prove its digest is
 # unchanged made a no-op refresh too slow for the SessionStart hook.
