@@ -95,10 +95,9 @@ def read_tails(db_path: Path, window: int, project: str = "") -> list[str]:
     # Chunks are pieces of a note, so a code fence can open in one and close in another.
     # Rejoining the note before stripping keeps the fence state whole; scanning chunk by
     # chunk would let the tail of a split code block through as if it were a real task.
-    notes: dict[str, list] = {}
+    notes: dict[str, tuple[str, list[str]]] = {}
     for path, note_project, body in rows:
-        entry = notes.setdefault(path, [note_project, []])
-        entry[1].append(body)
+        notes.setdefault(path, (note_project, []))[1].append(body)
 
     tails = []
     no_project_tails = []
