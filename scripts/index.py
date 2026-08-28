@@ -56,10 +56,10 @@ def strip_fences(body: str) -> str:
     A note that documents "open threads are written like this: - [ ] do X" must not
     hand that example to a reader as a live link or a live task.
 
-    A fence closes only on a marker at least as long as the one that opened it, which is
-    what CommonMark says and what the notes actually do: the way to show a ``` example is
-    to wrap it in ````, and closing on the inner marker would spill the rest of the outer
-    block back into the digest as live threads.
+    A fence closes only on a bare marker at least as long as the one that opened it, which
+    is what CommonMark says and what the notes actually do: the way to show a ``` example
+    is to wrap it in ````, and a second ```python inside a block starts nothing. Closing on
+    either would spill the rest of the outer block back into the digest as live threads.
     """
     visible, fence = [], None
     for line in body.splitlines():
@@ -68,7 +68,8 @@ def strip_fences(body: str) -> str:
             token = marker.group(1)
             if fence is None:
                 fence = token
-            elif token[0] == fence[0] and len(token) >= len(fence):
+            elif (token[0] == fence[0] and len(token) >= len(fence)
+                    and not line[marker.end():].strip()):
                 fence = None
             continue
         if fence is None:

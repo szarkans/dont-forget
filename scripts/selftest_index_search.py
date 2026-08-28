@@ -41,6 +41,8 @@ assert links == ["Да", "Нет", "Вложение"], links
 # spill the rest of the outer block back out — as links here, as live threads in the
 # digest, which is the note that documents how threads are written.
 assert extract_links("````\n```\n[[Внутри]]\n```\n[[Тоже внутри]]\n````\n[[Снаружи]]") == ["Снаружи"]
+# A marker carrying an info string opens a block, it never closes one.
+assert extract_links("```\n[[Внутри]]\n```python\n[[Тоже внутри]]\n```\n[[Снаружи]]") == ["Снаружи"]
 # Every word long enough to carry endings gets a prefix wildcard, whatever alphabet it
 # is in. Handing it to Cyrillic alone left every other language with neither the porter
 # stemmer (which only knows English) nor a prefix: a German vault answered "Textur" with
