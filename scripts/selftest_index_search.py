@@ -73,7 +73,8 @@ with tempfile.TemporaryDirectory() as tmp:
     vault = home / "vault"
     vault.mkdir()
     (vault / "note.md").write_text(
-        "---\ntype: atom\ndate: 2026-08-10\nreviewed: 2026-08-20\n"
+        "---\ntype: atom\nkind: gotcha\nsource: созвон 2026-08-10\nproject: catcraft\n"
+        "date: 2026-08-10\nreviewed: 2026-08-20\n"
         "dies-when: DNS record repointed\n---\n\n# Note\n\nfreshnessalpha\n")
     config_dir = home / ".dont-forget"
     config_dir.mkdir()
@@ -95,6 +96,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert fragment["type"] == "atom" and fragment["date"] == "2026-08-10", fragment
     assert fragment["reviewed"] == "2026-08-20", fragment
     assert fragment["dies_when"] == "DNS record repointed", fragment
+    # Genre and provenance travel with the fragment. Stored and not returned is the state
+    # this fixes: it is what stopped the digest from asking for gotchas by name.
+    assert fragment["kind"] == "gotcha", fragment
+    assert fragment["source"] == "созвон 2026-08-10", fragment
+    assert fragment["project"] == "catcraft", fragment
     query_log = config_dir / "queries.jsonl"
     log_lines_before = 0
     if query_log.is_file():
@@ -490,6 +496,18 @@ with tempfile.TemporaryDirectory() as tmp:
     assert schema_stale(stale), "an index without the aliases column must force a rebuild"
     build(vault, stale)
     assert resolved_links(stale)["gadget"] == "widget-moc.md"
+
+    # Same for the genre columns: an index built before them would keep answering, with
+    # every note's kind silently empty, and the digest would find no gotchas at all.
+    genreless = home / "genreless.db"
+    con = sqlite3.connect(genreless)
+    con.executescript(
+        "CREATE TABLE notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,"
+        " title TEXT NOT NULL, type TEXT, project TEXT, date TEXT, reviewed TEXT,"
+        " dies_when TEXT, aliases TEXT, mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);")
+    con.commit()
+    con.close()
+    assert schema_stale(genreless), "an index without kind and source must force a rebuild"
 
 # A vault with no aliases anywhere must resolve exactly as it did before.
 with tempfile.TemporaryDirectory() as tmp:

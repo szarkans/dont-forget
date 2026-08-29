@@ -41,6 +41,14 @@ sources by `path` and never present the fragment count as the note count. Treat
 `heading` as local context and `found_by` as an explanation of why a fragment appears
 in the results, not as evidence by itself.
 
+A fragment also carries `kind`, `source` and `project`. `kind` is the genre of the claim
+(`gotcha`, `decision`, `principle`, `fact`, `pain`, `stance`) and is the fastest way to
+tell a trap worth warning about from a decision worth citing. `source` says where the
+claim came from — a call, a session, a document — and `project` which project it belongs
+to; both of them let you say whether a claim is about the user's own work or someone
+else's. All three are empty on plenty of notes, and empty means "not recorded", never
+"does not apply": never present the absence of a `kind` as evidence about the note.
+
 Each fragment carries freshness fields — `type`, `date`, `reviewed`, `dies_when` — and
 they change how you may state a conclusion, not just how you cite it. Read the note's
 age as the later of `date` and `reviewed` (a re-reviewed note is not stale by its
