@@ -41,9 +41,10 @@ sources by `path` and never present the fragment count as the note count. Treat
 `heading` as local context and `found_by` as an explanation of why a fragment appears
 in the results, not as evidence by itself.
 
-A fragment also carries `kind`, `source` and `project`. `kind` is the genre of the claim
-(`gotcha`, `decision`, `principle`, `fact`, `pain`, `stance`) and is the fastest way to
-tell a trap worth warning about from a decision worth citing. `source` says where the
+A fragment also carries `kind`, `source` and `project`. `kind` is the genre of the claim —
+new notes carry `decision`, `gotcha`, `principle`, `pain` or `stance`, and older ones may
+carry values no longer written — and it is the fastest way to tell a trap worth warning
+about from a decision worth citing. `source` says where the
 claim came from — a call, a session, a document — and `project` which project it belongs
 to; both of them let you say whether a claim is about the user's own work or someone
 else's. All three are empty on plenty of notes, and empty means "not recorded", never

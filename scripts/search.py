@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 from common import DEFAULT_DB, DEFAULT_QUERY_LOG, connect_ro
-from index import refresh_index
+from index import refresh_index, schema_stale
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
 # How many top-bm25 chunks are re-ranked. The pool is reported, so a query that
@@ -303,6 +303,12 @@ def main() -> None:
     index_error = refresh_index(args.vault, db_path)
     if index_error and not db_path.exists():
         raise SystemExit(index_error)
+    if index_error and schema_stale(db_path):
+        # Falling back to the existing index is the graceful path, but an index built by
+        # an older version has none of the columns this version selects, so the fallback
+        # would be a raw sqlite traceback instead. Say which problem to fix.
+        raise SystemExit(f"{index_error} The existing index was built by an older version "
+                         "and cannot be searched until the refresh succeeds and rebuilds it.")
     result = search(query, budget, hub_cap, db_path, args.graph_share)
     if index_error:
         print(f"{index_error} Searching the existing index, which may be stale.", file=sys.stderr)

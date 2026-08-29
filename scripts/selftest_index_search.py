@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -497,17 +498,49 @@ with tempfile.TemporaryDirectory() as tmp:
     build(vault, stale)
     assert resolved_links(stale)["gadget"] == "widget-moc.md"
 
-    # Same for the genre columns: an index built before them would keep answering, with
+    # Same for the genre columns: an index built before them would keep answering with
     # every note's kind silently empty, and the digest would find no gotchas at all.
-    genreless = home / "genreless.db"
-    con = sqlite3.connect(genreless)
-    con.executescript(
-        "CREATE TABLE notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,"
-        " title TEXT NOT NULL, type TEXT, project TEXT, date TEXT, reviewed TEXT,"
-        " dies_when TEXT, aliases TEXT, mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);")
+    # The fixture is a REAL index with one column dropped, so the assertion can only pass
+    # because of the missing column. Hand-writing a bare notes table instead would leave
+    # out chunks_fts, and then staleness is detected by the missing FTS table whether or
+    # not the column check exists at all — a check that passes for the wrong reason.
+    for column in ("kind", "source"):
+        genreless = home / f"no-{column}.db"
+        shutil.copy(db, genreless)
+        con = sqlite3.connect(genreless)
+        con.execute(f"ALTER TABLE notes DROP COLUMN {column}")
+        con.commit()
+        con.close()
+        assert schema_stale(genreless), f"an index without {column} must force a rebuild"
+        build(vault, genreless)
+        assert not schema_stale(genreless)
+
+    # Searching an old-schema index is the one case the graceful "the refresh failed, so
+    # I searched what was already there" path cannot serve: the columns this version
+    # selects are not in that index, and the user would get a raw sqlite traceback.
+    old_schema = home / "old-schema.db"
+    shutil.copy(db, old_schema)
+    con = sqlite3.connect(old_schema)
+    con.execute("ALTER TABLE notes DROP COLUMN kind")
     con.commit()
     con.close()
-    assert schema_stale(genreless), "an index without kind and source must force a rebuild"
+    # The refresh has to actually fail, which needs the configured vault to be gone —
+    # passing --vault would just rebuild the index against an empty folder.
+    crash_home = home / "crash-home"
+    (crash_home / ".dont-forget").mkdir(parents=True)
+    shutil.copy(old_schema, crash_home / ".dont-forget" / "index.db")
+    (crash_home / ".dont-forget" / "config.json").write_text(
+        json.dumps({"vault": str(home / "gone")}))
+    crash_env = os.environ.copy()
+    crash_env["HOME"] = str(crash_home)
+    crash_env.pop("DONT_FORGET_HOME", None)
+    refused = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "widget"],
+        env=crash_env, capture_output=True, text=True,
+    )
+    assert refused.returncode != 0, refused
+    assert "older version" in refused.stderr, refused.stderr
+    assert "Traceback" not in refused.stderr, refused.stderr
 
 # A vault with no aliases anywhere must resolve exactly as it did before.
 with tempfile.TemporaryDirectory() as tmp:
