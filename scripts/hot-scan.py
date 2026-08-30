@@ -70,17 +70,10 @@ def normalize(name: str) -> str:
 def same_project(note_project: str, project: str) -> bool:
     """One project, one name — once case and separators are normalised away.
 
-    Matching on a shared prefix leaks badly, measured on a live vault of 894 notes: a
-    short client name is a prefix of every repository named after that client, so working
-    in acme-transenergo-epl-server pulled in all 259 notes filed under acme, and 83% of
-    that digest was another project's work. The same measurement showed the loose match
-    was not buying anything back: every spelling of one project that really did occur
-    (ACME Corp against acme-corp, Catcraft against catcraft) differs by case or separator
-    only, which normalising already folds. Every pair the prefix rule matched and
-    normalising does not was a pair of genuinely different projects.
-
-    A project that really does want a neighbour's notes (a dev environment, a wiki repo)
-    needs an explicit alias, not a rule that guesses from spelling.
+    Measured on 894 live notes: matching on a shared prefix made a short client name kin
+    to every repository named after that client (259 foreign notes in one digest, 83% of
+    it), while every real pair of spellings differed by case or separator only. A project
+    that does want a neighbour's notes needs an explicit alias, not a guess at spelling.
     """
     note_project = normalize(note_project or "")
     project = normalize(project or "")

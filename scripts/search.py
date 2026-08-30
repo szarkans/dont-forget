@@ -315,10 +315,8 @@ def main() -> None:
         result["coverage"]["index_stale"] = True
     if args.vault is None and args.db is None:
         try:
-            # Each entry records how the note arrived: matched the query text, or came in
-            # by following a link. Without that tag a pair of notes that always surface
-            # together cannot be told apart from two notes the graph walk always drags in
-            # behind each other, and every co-retrieval conclusion rests on the difference.
+            # found_by separates notes that matched the text from notes the graph walk
+            # dragged along; every co-retrieval conclusion rests on telling them apart.
             top: list[dict] = []
             seen: set[str] = set()
             for fragment in result["fragments"]:
