@@ -9,7 +9,10 @@ from pathlib import Path
 
 from common import DEFAULT_FEEDBACK as DEFAULT_FILE
 
-VERDICTS = ("saved-work", "noise", "false-note", "proven-miss")
+# saved-work / noise / false-note / proven-miss are about what a SEARCH returned.
+# rejected is about what the user turned down when it was offered for saving; mixing it
+# into "noise" would corrupt the search-quality numbers the other four exist to build.
+VERDICTS = ("saved-work", "noise", "false-note", "proven-miss", "rejected")
 # Deferred is not cancelled only while the return condition is mechanical (SPEC §11).
 MISS_TRIGGER = 3
 

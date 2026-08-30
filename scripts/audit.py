@@ -35,23 +35,35 @@ LINK_FLOOR = 3
 
 
 def dying_notes(con: sqlite3.Connection) -> list[dict]:
-    """Notes carrying a death condition, newest first, with nothing decided for them.
+    """Notes carrying a death condition that nobody has ruled on yet, newest first.
+
+    A note already marked `died` is left out: it was decided, and asking again every
+    couple of months is how a review stops being read.
 
     Whether the condition has arrived is a question about the world, and no script can
     see the world. It is asked of the user, with the note's own words in front of them.
     """
     rows = con.execute("""SELECT path, title, kind, project, date, reviewed, dies_when
-                          FROM notes WHERE dies_when <> ''
+                          FROM notes WHERE dies_when <> '' AND died = ''
                           ORDER BY date(date) DESC, path""").fetchall()
     return [dict(row) for row in rows]
 
 
 def _log_lines(log_path: Path) -> list[dict]:
+    """Readable lines only. A log cut short mid-write must not erase the rest of itself."""
+    entries = []
     try:
         with log_path.open(encoding="utf-8") as handle:
-            return [json.loads(line) for line in handle if line.strip()]
-    except (OSError, json.JSONDecodeError):
-        return []
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return entries
+    return entries
 
 
 def molecule_candidates(con: sqlite3.Connection, log_path: Path) -> tuple[list[dict], int]:

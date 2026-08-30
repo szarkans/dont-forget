@@ -35,7 +35,11 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-transcript-") as tmp:
     conversation = turns(path)
     assert [turn["role"] for turn in conversation] == ["user", "assistant", "user"], conversation
     assert "block deploys" in conversation[1]["text"]
-    assert "git log" not in conversation[1]["text"], "a tool call is not something that was said"
+    # A tool call IS evidence — the audit is asked whether errors were resolved and
+    # whether external systems were updated, and only the calls answer that — but it
+    # arrives as one line, not as its payload and result.
+    assert "git log" in conversation[1]["text"], conversation[1]
+    assert "used Bash" in conversation[1]["text"], conversation[1]
     assert "xxxx" not in render(conversation), "attachments must not reach the reader"
 
     # A short session goes to one reader whole.
@@ -51,6 +55,15 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-transcript-") as tmp:
     pieces = split(compacted, limit=100)
     assert len(pieces) == 2, pieces
     assert pieces[0][0]["text"].startswith("a") and pieces[1][0]["text"].startswith("b")
+
+    # A boundary says where memory was lost, not how much sits on either side: a huge
+    # stretch before the first compaction still has to be cut for its reader.
+    lopsided = ([{"role": "user", "text": "a" * 100} for _ in range(10)]
+                + [{"role": "compaction", "text": "--- compacted ---"}]
+                + [{"role": "user", "text": "b" * 100}])
+    lopsided_pieces = split(lopsided, limit=250)
+    assert len(lopsided_pieces) >= 3, lopsided_pieces
+    assert all(sum(len(t["text"]) for t in piece) <= 600 for piece in lopsided_pieces), lopsided_pieces
 
     # With no boundary recorded it still splits, by size, rather than handing one reader
     # everything — which is the failure the whole design is avoiding.

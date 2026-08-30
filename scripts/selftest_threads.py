@@ -12,10 +12,12 @@ from threads import close, closed_keys, evidence, key  # noqa: E402
 
 SCRIPT = Path(__file__).with_name("threads.py")
 
-# The digest truncates a long thread for display; the same thread must not come back to
-# life because it was shown with different spacing.
-assert key("merge  PR #41 ") == key("merge PR #41")
-assert key("merge PR #41") != key("merge PR #42")
+# The key follows the line the digest shows — spacing folded, session name included — so
+# the user can paste back what they see, and the same sentence recorded in two different
+# sessions closes in one of them only.
+assert key("merge  PR #41  (Session — a)") == key("merge PR #41 (Session — a)")
+assert key("merge PR #41 (Session — a)") != key("merge PR #41 (Session — b)")
+assert key("merge PR #41 (Session — a)") != key("merge PR #42 (Session — a)")
 
 with tempfile.TemporaryDirectory(prefix="dont-forget-threads-") as tmp:
     log = Path(tmp) / "closed.jsonl"
@@ -30,6 +32,12 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-threads-") as tmp:
     assert len(closed_keys(log)) == 2
     lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert lines[0]["thread"].startswith("run the release checklist"), lines
+
+    # An append-only file can be cut short mid-write. That line loses itself; every
+    # thread closed before it stays closed.
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write('{"key": "truncated-')
+    assert len(closed_keys(log)) == 2, closed_keys(log)
 
     # A closure with no reason is a guess, and the script refuses it.
     refused = subprocess.run(
@@ -48,6 +56,11 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-threads-") as tmp:
     found = evidence(f"check commit {head} landed")
     assert found and found["kind"] == "commit", found
     assert evidence("check commit deadbee landed") is None
+    # Existing is not landed: a commit that is not in this branch's history proves nothing
+    # about a thread that asks for it to be merged.
+    orphan = subprocess.run(["git", "-C", str(here), "hash-object", "-w", "--stdin"],
+                            input="not a commit", capture_output=True, text=True, check=True)
+    assert evidence(f"merge {orphan.stdout.strip()[:8]} into main") is None
 
     checked = json.loads(subprocess.run(
         [sys.executable, str(SCRIPT), "--log", str(log), "--check", "nothing to point at here"],

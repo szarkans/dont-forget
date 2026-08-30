@@ -152,11 +152,14 @@ def read_tails(db_path: Path, limit: int, project: str = "") -> list[str]:
             if len(tails) >= limit:
                 return tails
             item = " ".join(match.group(0).strip()[2:].split())
-            if thread_key(item) in closed:
-                continue
             if len(item) > MAX_ITEM_CHARS:
                 item = item[: MAX_ITEM_CHARS - 1] + "…"
-            tails.append(f"{item} (Session — {session_name}{suffix})")
+            line = f"{item} (Session — {session_name}{suffix})"
+            # Keyed by the line as shown, which is what the user can copy back, and which
+            # names its session — so the same sentence in two projects closes in one.
+            if thread_key(line) in closed:
+                continue
+            tails.append(line)
     return tails
 
 

@@ -44,14 +44,29 @@ def newest_transcript(cwd: Path | None = None) -> Path | None:
     return max(files, key=lambda path: path.stat().st_mtime) if files else None
 
 
+# A tool call is evidence: a command that failed, a pull request opened, a file written.
+# The audit is asked whether errors were resolved and whether external systems were
+# updated, and the answer to both lives in the calls — so they are kept, as one line each,
+# while their payloads and results are not.
+TOOL_LINE = 300
+
+
 def _text(content) -> str:
-    """Whatever the entry actually says, whichever shape this version wrote it in."""
+    """What the entry says, plus a trace of what it did, in whichever shape it was written."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        return "\n".join(part.get("text", "") for part in content
-                         if isinstance(part, dict) and part.get("type") == "text")
-    return ""
+    if not isinstance(content, list):
+        return ""
+    said = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text":
+            said.append(part.get("text", ""))
+        elif part.get("type") == "tool_use":
+            arguments = json.dumps(part.get("input", {}), ensure_ascii=False)[:TOOL_LINE]
+            said.append(f"<used {part.get('name', 'a tool')}: {arguments}>")
+    return "\n".join(said)
 
 
 def turns(path: Path) -> list[dict]:
@@ -81,18 +96,29 @@ def split(conversation: list[dict], limit: int = SPLIT_ABOVE) -> list[list[dict]
     if total <= limit:
         return [conversation] if conversation else []
 
-    pieces, current = [], []
+    at_compaction, current = [], []
     for turn in conversation:
         if turn["role"] == "compaction" and current:
-            pieces.append(current)
+            at_compaction.append(current)
             current = []
             continue
         current.append(turn)
     if current:
-        pieces.append(current)
-    if len(pieces) > 1:
-        return pieces
+        at_compaction.append(current)
 
+    # A compaction boundary says where the session lost its memory; it says nothing about
+    # how much sits on either side. A 400k stretch before the first compaction is still
+    # too much for one reader, so every piece is then cut down to the limit as well.
+    pieces = []
+    for piece in at_compaction:
+        pieces.extend(_by_size(piece, limit))
+    return pieces
+
+
+def _by_size(conversation: list[dict], limit: int) -> list[list[dict]]:
+    total = sum(len(turn["text"]) for turn in conversation)
+    if total <= limit:
+        return [conversation] if conversation else []
     parts = max(2, -(-total // limit))
     target, pieces, current, used = total / parts, [], [], 0
     for turn in conversation:
@@ -120,7 +146,7 @@ def main() -> None:
     path = args.path or newest_transcript()
     if path is None or not path.is_file():
         raise SystemExit(f"no transcript found in {project_dir()}")
-    pieces = split(turns(path), args.limit)
+    pieces = split(turns(path), max(1, args.limit))
     if args.piece:
         if not 1 <= args.piece <= len(pieces):
             raise SystemExit(f"piece {args.piece} of {len(pieces)}: out of range")

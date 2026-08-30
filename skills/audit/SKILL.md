@@ -1,18 +1,20 @@
 ---
 name: audit
-description: Read what the vault says, once in a while — dead conditions, notes that may be one claim, and names the vault keeps asking for. Proposes only.
+description: Read what the vault says, once in a while — dead conditions, notes that may be one claim, and names the vault keeps asking for. Proposes; the only thing it ever writes is a mark you approved.
 model: inherit
 ---
 
-# dont-forget:audit — read the content, propose, change nothing
+# dont-forget:audit — read the content, propose, write only what is approved
 
 `health` checks the machinery and runs on every session close. This reads the content and
 runs by hand, every couple of months. It is expensive because it asks a person to think,
 not because it is slow.
 
 The rule that governs everything below: **the system proposes, the user decides.** Nothing
-here is written, deleted, hidden or reordered without their word. Absence of information
-is irreversible; dead weight is not.
+is deleted, hidden or reordered, ever. The single thing this command writes is the `died:`
+mark on a note whose death the user has just confirmed — and that is a mark, not a
+removal: the note stays, and search keeps returning it. Absence of information is
+irreversible; dead weight is not.
 
 Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/audit.py"` and work through its JSON.
 

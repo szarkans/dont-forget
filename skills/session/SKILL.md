@@ -6,139 +6,107 @@ model: inherit
 
 # Close a session
 
-Two things happen here, in this order: an audit of what the session leaves unsaved, and
-— only with the user's word — the writing. Showing is the default; writing is the step
-they ask for. There is no separate audit command, because an audit nobody acts on is a
-report, and an audit that writes on its own is a vault filling up with paraphrase.
+Two things happen here, in this order: an audit of what the session leaves unsaved, and —
+only on the user's word — the writing. Showing is the default. An audit nobody acts on is
+a report; an audit that writes on its own fills the vault with paraphrase.
 
-Use the conversation as evidence and git as the reality check. Never invent a memory
-candidate, and never claim work the evidence does not support.
+Use the conversation as evidence and git as the reality check. Never claim work git does
+not show, and never invent a candidate the conversation does not support.
 
-## The audit is done by a fresh reader, not by you
+## Let a fresh reader do the audit
 
-You lived through this session, which makes you the worst available auditor of it: your
-context is full, and everything that became routine along the way is now invisible to you.
-So the audit is delegated, and it reads a file rather than a memory.
+You lived through this session, so you are its worst auditor: your context is full, and
+whatever became routine along the way is now invisible to you.
 
-- [ ] Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py"`. It prints the path of
-  this session's transcript, how many pieces it splits into, and how much conversation
-  there is. If it cannot find one, say so and audit from the conversation yourself,
-  naming that as a weaker check rather than passing it off as the same thing.
-- [ ] Start one sub-agent per piece, in parallel. Give each the exact command to read its
-  own piece — `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py" --piece N` — and the
-  audit checklist below. Never paste the transcript into the prompt: the point is that the
-  reader gets the file, not your recollection of it.
-- [ ] Tell each sub-agent to return candidates and nothing else. They do not write to the
-  vault, and they do not run `that`. A vault filling up with sub-agent paraphrase is the
-  failure being avoided; the writing happens below, with the user's word.
-- [ ] Merge the returned lists yourself, dropping exact duplicates and keeping every
-  disagreement visible. Two readers of two pieces will see different things; that is why
-  the transcript was split rather than duplicated.
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py"`. It prints this session's
+transcript path and how many pieces it splits into. Start one sub-agent per piece, in
+parallel, and give each the **path it printed** plus its own piece number —
+`transcript.py --path <path> --piece N` — because a second session in the same project
+would otherwise make a reader pick up someone else's conversation. Hand them the checklist
+below; never paste the transcript into a prompt, since the whole point is that they read
+the file rather than your recollection of it.
 
-## Audit — always, and it writes nothing
+They return candidates and write nothing. You merge the lists, drop exact duplicates, and
+keep every disagreement visible — two readers of two pieces see different things, which is
+why it was split rather than duplicated. If no transcript is found, audit it yourself and
+say plainly that this is the weaker check.
 
-This is the checklist to hand the sub-agents, and to follow yourself when there is no
-transcript to read.
+**The checklist for each reader:** which requests were completed and which were not; which
+decisions were made and whether they were saved; commits, pull requests and anything
+changed outside this repository; TODO/later/FIXME left in the conversation or the code;
+errors that were never resolved; questions that were never answered; code-bound "never X"
+/ "always Y" rules that belong in the repository rules. Then `git log --oneline -15` and
+`git status --short`, and no claim that outruns them.
 
-- [ ] Check every user request and say whether it was completed.
-- [ ] Identify decisions, and whether each was saved.
-- [ ] Identify completed actions such as commits and pull requests.
-- [ ] Find TODO, later, and FIXME items in the conversation or the code.
-- [ ] Check whether every error encountered was resolved, and every question answered.
-- [ ] Check whether relevant external systems were updated.
-- [ ] Check whether code-bound "never X" or "always Y" rules were recorded in rules.
-- [ ] Run `git log --oneline -15` and `git status --short`. Never report an action as done
-  when git does not show it. If git is unavailable, say so rather than assuming.
-- [ ] Report `Done`, `Missed` memory candidates, and `Hanging threads`.
-- [ ] Include a memory candidate only when the conversation visibly supports it.
-- [ ] Give every candidate a proposed destination: the vault, the repository rules, a
-  runbook, or nowhere. Deciding should cost the user one movement, not a deliberation;
-  when you are unsure, the default is nowhere.
-- [ ] Show the whole list, uncut. The user is the only working filter, and a trimmed list
-  takes away their chance to catch what you understood wrongly.
-- [ ] Sort each loose end by whether doing something kills it. "Merge PR #41" dies the
-  moment someone merges it — that is a hanging thread. "The RCON password went out in
-  public chat" describes how the world is, and no action erases it — that is knowledge,
-  and it belongs in a note through `that`. Threads are shown by freshness and fall out of
-  the digest, so a fact parked among them is a fact thrown away.
-- [ ] Make every hanging thread name what is unfinished and who finishes it. This vault's
-  single most repeated line was `e2e not verified this session` — 56 of 629 threads — and
-  it named neither, so no later session could act on it: it was a reflex, not a finding.
-  Write the actionable version instead: "the release checklist in PR #41 has not been run
-  against prod — user runs it".
-- [ ] Never run or simulate tests or QA. Report plainly which checks ran and which did not.
+## Present the candidates
 
-## Writing — only on the user's word
+Show the whole list, uncut — the user is the only filter that works, and trimming it takes
+away their chance to catch what you read wrongly. Give each candidate a destination: the
+vault, the repository rules, a runbook, or nowhere; when you are unsure, nowhere.
 
-`--full` is consent for the whole chain below. Without it, stop after the audit and offer.
+Sort every loose end by whether doing something kills it. "Merge PR #41" dies when someone
+merges it — a thread. "The RCON password went out in public chat" describes how the world
+is and no action erases it — knowledge, and it goes through `that`. Threads fall out of
+the digest by freshness, so a fact parked among them is a fact thrown away.
 
-- [ ] Capture an origin anchor first: the session's opening request, `git rev-parse HEAD`,
-  and `git status --short`.
-- [ ] Save the accepted knowledge candidates through `that`, one at a time.
-- [ ] Log what the user turned down by piping to
-  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"`, one JSON object per verdict
-  (`{"verdict": "noise", "query": "<the candidate>"}`). Every refusal is data: in a month
-  it shows what actually gets rejected — public knowledge, trivia, duplicates — and the
-  filter can then be built on a measurement instead of a guess.
-- [ ] Then write the session note itself, as below.
-- [ ] Then run `health` — the chain's last step. Its commit is local to the vault, and
-  asking for it separately turns a one-command close into a conversation.
-- [ ] Verify the writing actually happened: the new notes appear in `git status`, each has
-  a type, an atomic scope, and a real link.
-- [ ] Compare the end state with the origin anchor. If neither git nor the vault changed,
-  say `already in order, nothing to redo`, and do not imply work happened.
+Every thread must name what is unfinished and who finishes it. The most repeated line in
+this vault was `e2e not verified this session` — 56 of 629 threads — and it named neither,
+so no later session could act on it. Write "the release checklist in PR #41 has not been
+run against prod — user runs it" instead.
+
+Never run or simulate tests to fill a gap. Say which checks actually ran.
+
+## Write, once they say so
+
+`--full` is consent for the whole chain. Without it, stop here and offer.
+
+1. Anchor first: the session's opening request, `git rev-parse HEAD`, `git status --short`.
+2. Save accepted knowledge through `that`, one candidate at a time.
+3. Log every refusal: pipe `{"verdict": "rejected", "query": "<the candidate>", "notes":
+   [], "note": "<why they said no>"}` to
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"`. Each "no" is data; in a month
+   it says what actually gets rejected, and the filter can be built on that instead of a
+   guess.
+4. Close the threads that are finished (below).
+5. Write the session note (below).
+6. Run `health` last — its commit is local to the vault, and asking for it separately turns
+   a one-command close into a conversation.
+7. Verify against the anchor: the notes exist in the vault and are indexed. Do not expect
+   them in `git status` — `health` has just committed them. If nothing changed at all, say
+   `already in order, nothing to redo`.
 
 ## Threads that are already finished
 
-Threads outlive their work, and a digest offering something that was done three weeks ago
-teaches the user to stop reading it. Closing one is bookkeeping outside the vault — the
-session note that recorded it is a dated snapshot and is never edited afterwards.
+A digest offering work finished three weeks ago teaches the user to stop reading it. Pass
+the threads it still shows to
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/threads.py" --check "<thread as the digest shows
+it>"`, and read what comes back as evidence about **the thing named**, not a verdict on
+the thread: "backport the merged PR #41" mentions something merged and is not itself done.
 
-- [ ] Pass the threads the digest is still showing to
-  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/threads.py" --check "<thread>" --check "<thread>"`.
-  It answers with the evidence it found for each: a closed issue, a merged pull request,
-  a commit that exists.
-- [ ] Where it found evidence, close it without asking:
-  `--close "<thread>" --reason "<the evidence>"`. Nobody's opinion is involved when the
-  outside world already answered.
-- [ ] Where it found none, you may still propose — but the proposal has to carry its own
-  evidence ("this looks done in commit abc1234, close it?"). Without evidence, deciding
-  costs the user more than the thread is worth, so leave it alone.
-- [ ] **Never close a thread the user did not confirm, unless the host confirmed it.** If
-  the session is ending without them — a hook, a timeout, an empty room — close nothing.
-  That is the safe refusal: an open thread costs a line in a digest, a wrongly closed one
-  costs the work it was holding.
-- [ ] Say which threads you closed and on what evidence. A closure nobody was told about
-  is indistinguishable from a thread that was quietly lost.
+Close without asking only when the thread asked for exactly what the evidence shows —
+`--close "<thread>" --reason "<the evidence>"`. Otherwise propose it, carrying that
+evidence, and let the user decide. **Close nothing when the user is not there**: an open
+thread costs a line in a digest, a wrongly closed one costs the work it was holding. Say
+which threads you closed and on what. The note that recorded them is never edited.
 
 ## The session note
 
-Open threads live only in this note's pending section; the digest reads them from the
-index, so there is no second place to keep in sync.
+Threads live only in this note's pending section; the digest reads them from the index.
 
-- [ ] Title it `Session — YYYY-MM-DD <short topic>`, distinct from other sessions that
-  day. Prefer a pull request number, ticket, or branch. The filename stem is the title.
-- [ ] Frontmatter: `type: session`, `date`, `tags` with `session` first, and `project`
-  when it is known.
-- [ ] Body: `# Session — YYYY-MM-DD <short topic>`, then `## Done`, `## Decisions`, and
-  `## Next steps / pending`.
-- [ ] Put every unfinished thread only in `## Next steps / pending`, as an unchecked
-  `- [ ]`. Each names what is unfinished and who finishes it, then the state someone needs
-  to resume: work left uncommitted, the attempt that just failed, the plan half-executed,
-  what was already tried.
-- [ ] Say what is in flight right now, not only what was finished. The end of a context is
-  the end of a session, and this note is the only handoff there is.
-- [ ] Keep knowledge out of the pending section, by the dying test above.
-- [ ] Add `## Links`. Link a MOC when a fitting one already exists — find it with
-  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<topic or project>"`. When none
-  fits, link the notes this session actually touched instead of inventing a hub.
-- [ ] Write only through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"`, sending
-  JSON with `filename` and `content`. Never write the vault file directly.
-- [ ] If the filename already exists, read it and offer an update with `action: "replace"`
-  and `expected_sha` set to the SHA-256 of the current bytes. On `conflict`, stop and tell
-  the user; never resolve it silently.
-- [ ] Report the note name, the open-thread count, what entered the index, and anything
-  that remains unsaved.
+- [ ] Title `Session — YYYY-MM-DD <short topic>`, distinct from others that day — prefer a
+  PR number, ticket or branch. The filename stem is the title.
+- [ ] Frontmatter: `type: session`, `date`, `tags` with `session` first, `project` if known.
+- [ ] Body: `# Session — …`, then `## Done`, `## Decisions`, `## Next steps / pending`.
+- [ ] Unfinished threads go only in `## Next steps / pending`, as `- [ ]`, each carrying
+  the state someone needs to resume: uncommitted work, the attempt that just failed, the
+  plan half-executed. Say what is **in flight right now**, not only what was finished —
+  the end of a context is the end of a session, and this note is the only handoff.
+- [ ] `## Links`: a MOC if a fitting one exists (find it with `search.py`), otherwise the
+  notes this session actually touched. Do not invent a hub to fill the slot.
+- [ ] Write only through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"` with
+  `filename` and `content`. If the name exists, offer `action: "replace"` with
+  `expected_sha`; on `conflict`, stop and tell the user.
+- [ ] Report the note name, the thread count, what entered the index, what stayed unsaved.
 
-Keep statements factual and compact. Preserve commit ids, pull request numbers, branches,
-failed approaches, and the constraints someone needs to pick the work back up.
+Keep it factual and compact: commit ids, PR numbers, branches, failed approaches, and the
+constraints someone needs to pick the work back up.
