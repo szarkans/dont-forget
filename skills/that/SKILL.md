@@ -90,7 +90,12 @@ model: inherit
   when a fitting one already exists; when none does, link the notes the claim actually
   touches and stop there. MOC pages arise from demand — a name linked often enough
   earns one — so inventing a hub to satisfy this line produces exactly the disconnected
-  page the rule was meant to prevent. Put links in prose, never inside code blocks.
+  page the rule was meant to prevent. When the claim clearly belongs to a broader topic
+  that has no note yet, link that topic by its **bare name** (`[[OAuth]]`), never by a
+  hub name (`[[MOC — OAuth]]`): a bare name linked often enough is the demand signal
+  that earns a MOC, whereas a hand-written `MOC — ` link is the invented hub this rule
+  forbids — and the demand counter, which only sees bare names, never records it, so the
+  hub it was reaching for can never be born. Put links in prose, never inside code blocks.
 - [ ] Write vault notes only by sending the complete filename and Markdown content
   JSON to `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"`. On `exists-same`, report that the note
   was already present. On `conflict`, stop and tell the user; never replace or

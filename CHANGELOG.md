@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.2 — 2026-08-30
+
+### Fixed
+- The note-writing skill let the agent hand-write a hub name (`[[MOC — OAuth]]`) for a
+  topic that had no note yet. But the counter that decides when a MOC is born only sees
+  **bare** names (`[[OAuth]]`), so those hub links were dropped and the hub could never
+  gather the demand to be born. The skill now says: link such a topic by its bare name,
+  never by a hub name.
+
 ## 0.10.1 — 2026-08-30
 
 ### Fixed
