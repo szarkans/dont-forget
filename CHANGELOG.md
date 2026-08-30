@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.4 — 2026-08-31
+
+### Fixed
+- Every refusal you recorded was written to the journal and then missing from the health
+  report. The journal's writer accepted a `rejected` verdict; the reader counted four
+  verdicts and quietly dropped it, so the one signal saying *what you turn down* never
+  reached the report it was collected for. Both scripts now read one shared list, because
+  two copies in two files is what drifted in the first place. Refusals already in
+  `~/.dont-forget/feedback.jsonl` appear in the next report — nothing was lost, only
+  unreported.
+
 ## 0.10.3 — 2026-08-30
 
 ### Fixed

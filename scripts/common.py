@@ -22,6 +22,11 @@ CONFIG_PATH = HOME_DIR / "config.json"
 
 SETUP_HINT = "Run /dont-forget:setup — it finds your vault and writes the config for you."
 
+# One list, because the writer and the reader of the journal are different scripts and
+# drifted apart once: feedback-log.py accepted "rejected" while checkup.py counted four
+# verdicts, so every refusal was written and then silently missing from the report.
+VERDICTS = ("saved-work", "noise", "false-note", "proven-miss", "rejected")
+
 
 class NotConfigured(ValueError):
     """No usable vault. Subclasses ValueError so existing callers still catch it.

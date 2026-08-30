@@ -4,9 +4,13 @@
 import json
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import VERDICTS  # noqa: E402
 
 SCRIPT = Path(__file__).with_name("checkup.py")
 SCHEMA = """
@@ -53,13 +57,16 @@ with tempfile.TemporaryDirectory() as tmp:
     assert data["broken_links"] == {"count": 1, "items": [{"src_title": "Broken", "dst_name": "Missing"}]}
     assert data["stale"]["count"] == 1
     assert data["stale"]["items"] == [{"title": "Stale", "path": "stale.md", "age_days": 61}]
-    zeros = {name: 0 for name in ("saved-work", "noise", "false-note", "proven-miss")}
+    zeros = {name: 0 for name in VERDICTS}
     assert data["feedback"] == {"last_7_days": zeros, "total": zeros}
 
     now = datetime.now(timezone.utc)
     events = [
         {"ts": now.isoformat(), "verdict": "noise"},
         {"ts": (now - timedelta(days=8)).isoformat(), "verdict": "saved-work"},
+        # A refusal the user made. The writer has always accepted this verdict; the report
+        # counted four and dropped it, so every "no" was recorded and then invisible.
+        {"ts": now.isoformat(), "verdict": "rejected"},
     ]
     feedback.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
     result = subprocess.run(
@@ -67,7 +74,7 @@ with tempfile.TemporaryDirectory() as tmp:
         check=True, capture_output=True, text=True,
     )
     counts = json.loads(result.stdout)["feedback"]
-    assert counts["last_7_days"] == {**zeros, "noise": 1}
-    assert counts["total"] == {**zeros, "saved-work": 1, "noise": 1}
+    assert counts["last_7_days"] == {**zeros, "noise": 1, "rejected": 1}, counts
+    assert counts["total"] == {**zeros, "saved-work": 1, "noise": 1, "rejected": 1}, counts
 
 print("ok")

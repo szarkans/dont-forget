@@ -7,9 +7,8 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from common import DEFAULT_DB, DEFAULT_FEEDBACK, connect_ro
+from common import DEFAULT_DB, DEFAULT_FEEDBACK, VERDICTS, connect_ro
 
-VERDICTS = ("saved-work", "noise", "false-note", "proven-miss")
 STALE_DAYS = 60
 LIMIT = 50
 
