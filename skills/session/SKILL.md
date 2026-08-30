@@ -14,7 +14,31 @@ report, and an audit that writes on its own is a vault filling up with paraphras
 Use the conversation as evidence and git as the reality check. Never invent a memory
 candidate, and never claim work the evidence does not support.
 
+## The audit is done by a fresh reader, not by you
+
+You lived through this session, which makes you the worst available auditor of it: your
+context is full, and everything that became routine along the way is now invisible to you.
+So the audit is delegated, and it reads a file rather than a memory.
+
+- [ ] Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py"`. It prints the path of
+  this session's transcript, how many pieces it splits into, and how much conversation
+  there is. If it cannot find one, say so and audit from the conversation yourself,
+  naming that as a weaker check rather than passing it off as the same thing.
+- [ ] Start one sub-agent per piece, in parallel. Give each the exact command to read its
+  own piece — `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py" --piece N` — and the
+  audit checklist below. Never paste the transcript into the prompt: the point is that the
+  reader gets the file, not your recollection of it.
+- [ ] Tell each sub-agent to return candidates and nothing else. They do not write to the
+  vault, and they do not run `that`. A vault filling up with sub-agent paraphrase is the
+  failure being avoided; the writing happens below, with the user's word.
+- [ ] Merge the returned lists yourself, dropping exact duplicates and keeping every
+  disagreement visible. Two readers of two pieces will see different things; that is why
+  the transcript was split rather than duplicated.
+
 ## Audit — always, and it writes nothing
+
+This is the checklist to hand the sub-agents, and to follow yourself when there is no
+transcript to read.
 
 - [ ] Check every user request and say whether it was completed.
 - [ ] Identify decisions, and whether each was saved.
