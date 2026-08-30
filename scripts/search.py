@@ -164,7 +164,7 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
     if not scores:
         return [], skipped, 0
     marks = ",".join("?" for _ in scores)
-    rows = con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,c.heading_path,c.body FROM chunks c
+    rows = con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body FROM chunks c
         JOIN notes n ON n.id=c.note_id WHERE c.note_id IN ({marks}) ORDER BY n.path,c.ord""",
         tuple(scores)).fetchall()
     items, taken = [], set()
@@ -175,7 +175,7 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
         taken.add(row["note_id"])
         items.append({"path": row["path"], "type": row["type"], "kind": row["kind"],
                       "source": row["source"], "project": row["project"], "date": row["date"],
-                      "reviewed": row["reviewed"], "dies_when": row["dies_when"],
+                      "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
                       "heading": row["heading_path"], "text": row["body"],
                       "score": round(scores[row["note_id"]], 6), "terms_matched": 0, "found_by": "link"})
     items.sort(key=lambda item: -item["score"])
@@ -235,12 +235,12 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     # the vault knows, so no hits here means the vault holds nothing starting with even that.
     unmatched = [origin for term, origin in terms.items() if term in content and not hits[term]]
 
-    rows = con.execute("""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,c.heading_path,c.body,bm25(chunks_fts) AS rank
+    rows = con.execute("""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body,bm25(chunks_fts) AS rank
         FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
         WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""", (" OR ".join(content), POOL)).fetchall()
     text = [{"path": row["path"], "type": row["type"], "kind": row["kind"],
              "source": row["source"], "project": row["project"], "date": row["date"],
-             "reviewed": row["reviewed"], "dies_when": row["dies_when"],
+             "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
              "heading": row["heading_path"], "text": row["body"],
              "score": round(mass[row["id"]], 6), "terms_matched": matched_terms[row["id"]],
              "found_by": "text", "_id": row["id"], "_note": row["note_id"], "_bm25": row["rank"]}

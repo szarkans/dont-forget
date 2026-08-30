@@ -61,6 +61,12 @@ checked it now. Do not hand the user a stale observation with the confidence of 
 standing rule. When `dies_when` names an event that has plausibly already happened, say
 the note may be dead rather than presenting it as current.
 
+`died` is that judgement already made: someone confirmed in an audit that the condition
+arrived, on the date the field carries. Such a note is still returned — nothing is ever
+hidden — but it must never be quoted as current. Say the condition has arrived and give
+the date, and treat the claim as a record of what was once true. A dead note whose warning
+you drop is worse than a missing one: the reader acts on it with confidence.
+
 A `type: session` fragment is a diary entry: it records how the work was thought about
 that day, not how things stand now. Attribute it that way ("as of the 26th the plan was
 X"), and when a session note and a later note disagree, the later note wins. A decision

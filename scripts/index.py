@@ -158,7 +158,7 @@ def make_chunks(title: str, body: str) -> list[tuple[str, str, int]]:
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,
- title TEXT NOT NULL, type TEXT, kind TEXT, source TEXT, project TEXT, date TEXT, reviewed TEXT, dies_when TEXT, aliases TEXT,
+ title TEXT NOT NULL, type TEXT, kind TEXT, source TEXT, project TEXT, date TEXT, reviewed TEXT, dies_when TEXT, died TEXT, aliases TEXT,
  mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
  heading_path TEXT NOT NULL, body TEXT NOT NULL, ord INTEGER NOT NULL);
@@ -205,7 +205,7 @@ def schema_stale(db_path: Path) -> bool:
     except sqlite3.Error:
         return True
     return (not row or TOKENIZER not in row[0]
-            or not {"aliases", "dies_when", "kind", "source"} <= columns)
+            or not {"aliases", "dies_when", "died", "kind", "source"} <= columns)
 
 
 def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dict:
@@ -245,16 +245,18 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
                 con.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE note_id=?)", (note_id,))
                 con.execute("DELETE FROM chunks WHERE note_id=?", (note_id,))
                 con.execute("DELETE FROM links WHERE src_note_id=?", (note_id,))
-                con.execute("UPDATE notes SET title=?,type=?,kind=?,source=?,project=?,date=?,reviewed=?,dies_when=?,aliases=?,mtime=?,sha256=? WHERE id=?",
+                con.execute("UPDATE notes SET title=?,type=?,kind=?,source=?,project=?,date=?,reviewed=?,dies_when=?,died=?,aliases=?,mtime=?,sha256=? WHERE id=?",
                             (title, _scalar(meta.get("type")), _scalar(meta.get("kind")), _scalar(meta.get("source")),
                              _scalar(meta.get("project")), _scalar(meta.get("date")),
-                             _scalar(meta.get("reviewed")), _scalar(meta.get("dies-when")), _scalar(meta.get("aliases")), mtime, digest, note_id))
+                             _scalar(meta.get("reviewed")), _scalar(meta.get("dies-when")),
+                             _scalar(meta.get("died")), _scalar(meta.get("aliases")), mtime, digest, note_id))
             else:
-                cur = con.execute("INSERT INTO notes(path,title,type,kind,source,project,date,reviewed,dies_when,aliases,mtime,sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                cur = con.execute("INSERT INTO notes(path,title,type,kind,source,project,date,reviewed,dies_when,died,aliases,mtime,sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                   (rel, title, _scalar(meta.get("type")), _scalar(meta.get("kind")),
                                    _scalar(meta.get("source")), _scalar(meta.get("project")),
                                    _scalar(meta.get("date")), _scalar(meta.get("reviewed")),
-                                   _scalar(meta.get("dies-when")), _scalar(meta.get("aliases")), mtime, digest))
+                                   _scalar(meta.get("dies-when")), _scalar(meta.get("died")),
+                                   _scalar(meta.get("aliases")), mtime, digest))
                 note_id = cur.lastrowid
             for heading, chunk_body, ordinal in make_chunks(title, body):
                 cur = con.execute("INSERT INTO chunks(note_id,heading_path,body,ord) VALUES(?,?,?,?)",
