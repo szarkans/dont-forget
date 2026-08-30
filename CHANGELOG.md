@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1 — 2026-08-30
+
+### Fixed
+- The digest filtered by project *after* capping how much it read, so a project whose
+  notes are older than the cap showed none of its own and the lists filled up with
+  notes filed under no project at all. Measured on a live vault: two projects with 21
+  and 8 gotchas of their own showed zero. It now filters first and reads note bodies
+  only for what survives — which is also twice as fast, 6 ms against 12.
+
 ## 0.10.0 — 2026-08-30
 
 ### Breaking
