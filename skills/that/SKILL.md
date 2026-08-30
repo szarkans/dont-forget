@@ -1,10 +1,10 @@
 ---
-name: this
+name: that
 description: "Persist durable knowledge when it would change how a future session behaves. Capture atomic, deduplicated vault notes or route actionable code rules to the appropriate rules file."
 model: inherit
 ---
 
-# dont-forget:this — Persist Durable Knowledge
+# dont-forget:that — Persist Durable Knowledge
 
 - [ ] Treat persistence as a behavior change, not a transcript archive. Save only
   knowledge that would make a future session act differently; otherwise say "nothing

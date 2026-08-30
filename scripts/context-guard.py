@@ -259,7 +259,7 @@ def message(name: str, used: int, window: int, autosave: bool) -> str:
     if name.startswith("rot-"):
         return (f"Context has passed {thousands(used)} tokens. Answer quality degrades as a "
                 f"context grows long, and saving does not undo that — only a fresh session "
-                f"does. " + call("/dont-forget:review --full",
+                f"does. " + call("/dont-forget:session --full",
                                  "stores what this session learned") +
                 f" Either way, tell the user a new session would now serve them better and "
                 f"let them decide; never clear on your own." + tail)
@@ -273,7 +273,7 @@ def message(name: str, used: int, window: int, autosave: bool) -> str:
     return (f"Context is {thousands(used)} of a {thousands(window)} window; Claude Code "
             f"auto-compacts at {point} and the raw conversation is replaced by a summary. "
             f"There is still room to do this properly. " +
-            call("/dont-forget:review --full",
+            call("/dont-forget:session --full",
                  "audits what went unsaved, stores the facts, writes the session note") +
             tail)
 

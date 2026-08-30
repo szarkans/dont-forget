@@ -124,3 +124,23 @@ most, never as a list.
 
 A large `matched_chunks` with a small `returned` is evidence of incomplete coverage,
 not a reason to silently add notes beyond the results.
+
+## When the recall itself is evidence
+
+Some searches prove something about the memory rather than about the topic, and that
+proof is worth a line in the journal. Log it at the moment it appears — never
+reconstruct one later because someone asked — by piping one JSON object to
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"` with `verdict`, a non-empty
+`query`, `notes` (the returned note paths), and `note`, one line on what happened.
+
+Four verdicts, and nothing else: `saved-work` when a result demonstrably avoided
+repeated work; `noise` when the results were irrelevant; `false-note` when a returned
+note is demonstrably false or out of date; `proven-miss` when the search found nothing
+and the same session later turned the note up another way. A suspicion that the vault
+probably holds something is not proof of a miss — the whole vault is never visible —
+so it is not logged.
+
+The script answers with the running `proven_misses` count, and sometimes a `trigger`
+field. Show that line to the user when it appears: it is the agreed signal that
+full-text search alone has stopped being enough. The journal lives outside the vault,
+at `~/.dont-forget/feedback.jsonl`; never write it into a note.

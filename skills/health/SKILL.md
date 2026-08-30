@@ -1,5 +1,5 @@
 ---
-name: checkup
+name: health
 description: Commit the vault and report its indexed health.
 model: inherit
 ---
