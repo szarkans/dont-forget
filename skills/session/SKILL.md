@@ -88,6 +88,29 @@ transcript to read.
 - [ ] Compare the end state with the origin anchor. If neither git nor the vault changed,
   say `already in order, nothing to redo`, and do not imply work happened.
 
+## Threads that are already finished
+
+Threads outlive their work, and a digest offering something that was done three weeks ago
+teaches the user to stop reading it. Closing one is bookkeeping outside the vault — the
+session note that recorded it is a dated snapshot and is never edited afterwards.
+
+- [ ] Pass the threads the digest is still showing to
+  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/threads.py" --check "<thread>" --check "<thread>"`.
+  It answers with the evidence it found for each: a closed issue, a merged pull request,
+  a commit that exists.
+- [ ] Where it found evidence, close it without asking:
+  `--close "<thread>" --reason "<the evidence>"`. Nobody's opinion is involved when the
+  outside world already answered.
+- [ ] Where it found none, you may still propose — but the proposal has to carry its own
+  evidence ("this looks done in commit abc1234, close it?"). Without evidence, deciding
+  costs the user more than the thread is worth, so leave it alone.
+- [ ] **Never close a thread the user did not confirm, unless the host confirmed it.** If
+  the session is ending without them — a hook, a timeout, an empty room — close nothing.
+  That is the safe refusal: an open thread costs a line in a digest, a wrongly closed one
+  costs the work it was holding.
+- [ ] Say which threads you closed and on what evidence. A closure nobody was told about
+  is indistinguishable from a thread that was quietly lost.
+
 ## The session note
 
 Open threads live only in this note's pending section; the digest reads them from the

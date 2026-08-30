@@ -12,6 +12,7 @@ from pathlib import Path
 
 from common import DEFAULT_DB, config_count, connect_ro
 from index import refresh_index, strip_fences
+from threads import closed_keys, key as thread_key
 
 # An unticked box in a session note is an unfinished thread, wherever it sits. Matching
 # a list of heading names instead used to lose real tails two ways: a heading nobody
@@ -139,6 +140,9 @@ def read_tails(db_path: Path, limit: int, project: str = "") -> list[str]:
     ordered = _by_project([{"path": path, "project": note_project, "bodies": bodies}
                            for path, (note_project, bodies) in notes.items()], project)
 
+    # A thread the user has closed is gone from the digest and untouched in its note: the
+    # session note is a dated snapshot, and ticking a box in it afterwards edits history.
+    closed = closed_keys()
     limit = max(0, limit)
     tails: list[str] = []
     for note in ordered:
@@ -148,6 +152,8 @@ def read_tails(db_path: Path, limit: int, project: str = "") -> list[str]:
             if len(tails) >= limit:
                 return tails
             item = " ".join(match.group(0).strip()[2:].split())
+            if thread_key(item) in closed:
+                continue
             if len(item) > MAX_ITEM_CHARS:
                 item = item[: MAX_ITEM_CHARS - 1] + "…"
             tails.append(f"{item} (Session — {session_name}{suffix})")
