@@ -11,7 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from common import vault_from_config
+from common import config, vault_from_config
+from secret_scan import warning
 
 try:
     import fcntl
@@ -115,10 +116,18 @@ def main() -> None:
             status = replace_note(vault, filename, content, expected_sha.lower())
         else:
             status = write_note(vault, filename, content)
+        # Every write, whatever the genre: "the RCON password leaked" arrived as an open
+        # thread, not as a gotcha. The warning goes in the returned status as well as to
+        # stderr, so it can be counted later instead of scrolling past.
+        secret_warning = warning(content) if config().get("scan_secrets", True) else ""
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-    print(json.dumps({"status": status}, separators=(",", ":")))
+    result = {"status": status}
+    if secret_warning:
+        print(secret_warning, file=sys.stderr)
+        result["warning"] = secret_warning
+    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":

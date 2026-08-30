@@ -17,7 +17,9 @@ model: inherit
   worst kind of noise: written in common words, it matches many queries and answers
   none, while the byte budget drops real fragments to make room for it.
 - [ ] Redact passwords, tokens, keys, and other secrets as `<REDACTED>` before any
-  content is written or shown in a write payload.
+  content is written or shown in a write payload. The writer scans for them too and
+  returns a `warning` beside the status — it warns, it does not block, so a warning
+  means the secret is now in the vault: say so and name the credential to rotate.
 - [ ] Separate two or more independent claims into two or more notes. Never combine
   unrelated claims. If a claim cannot fit in a one-phrase title, split it further.
 - [ ] Route an actionable code-bound "never X" or "always Y" rule away from the

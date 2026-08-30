@@ -78,4 +78,37 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     closed = invoke(vault, "Atom — closed.md", "---\ntype: atom\n---\nbody\n")
     assert closed.returncode == 0, closed.stderr
 
+    # A secret warns and never blocks: the note lands, and the warning rides along in the
+    # returned status so it can be counted rather than scrolled past.
+    leaked = invoke(vault, "Atom — leaked.md", "---\ntype: atom\n---\npassword: hunter2-battery-x\n")
+    assert leaked.returncode == 0, leaked.stderr
+    body = json.loads(leaked.stdout)
+    assert body["status"] == "created", body
+    assert "possible secret" in body["warning"], body
+    assert "possible secret" in leaked.stderr
+    assert (vault / "Atom — leaked.md").exists()
+
+    # Prose *about* a leak is not a leak. This is the shape the vault actually holds, and
+    # a scanner that fires on it teaches the reader to ignore every warning it prints.
+    innocent = invoke(vault, "Atom — incident.md",
+                      "---\ntype: atom\n---\nRCON-пароль засветился в открытом чате, ключ ротирован.\n")
+    assert innocent.returncode == 0, innocent.stderr
+    assert "warning" not in json.loads(innocent.stdout), innocent.stdout
+
+with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
+    # The scan is on by default and can be turned off without answering questions.
+    home = Path(directory)
+    vault = home / "vault"
+    vault.mkdir()
+    (home / "config.json").write_text(json.dumps({"vault": str(vault), "scan_secrets": False}))
+    quiet = subprocess.run(
+        [sys.executable, str(SCRIPT), "--vault", str(vault)],
+        input=json.dumps({"filename": "Atom — quiet.md",
+                          "content": "---\ntype: atom\n---\npassword: hunter2-battery-x\n"}),
+        text=True, capture_output=True, check=False,
+        env={"PATH": "/usr/bin:/bin", "DONT_FORGET_HOME": str(home)},
+    )
+    assert quiet.returncode == 0, quiet.stderr
+    assert json.loads(quiet.stdout) == {"status": "created"}, quiet.stdout
+
 print("ok")
