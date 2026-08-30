@@ -51,5 +51,5 @@ folder the user believed was full means the wrong folder was chosen; say so rath
 reporting success.
 
 Close by naming what the user can do next: recall with `/dont-forget:about`, save with
-`/dont-forget:this`. A session digest of open threads appears on its own at the start of
-the next session, so mention that it needs a restart to show up.
+`/dont-forget:this`. A digest of the freshest open threads and gotchas appears on its own
+at the start of the next session, so mention that it needs a restart to show up.

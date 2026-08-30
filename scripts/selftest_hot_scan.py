@@ -11,12 +11,12 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("hot-scan.py")
-HOT_SCAN = runpy.run_path(SCRIPT)
+HOT_SCAN = runpy.run_path(str(SCRIPT))
 
 
 SCHEMA = """
-CREATE TABLE notes(id INTEGER PRIMARY KEY, path TEXT, title TEXT, type TEXT,
- project TEXT, date TEXT, reviewed TEXT, mtime INTEGER, sha256 TEXT);
+CREATE TABLE notes(id INTEGER PRIMARY KEY, path TEXT, title TEXT, type TEXT, kind TEXT,
+ source TEXT, project TEXT, date TEXT, reviewed TEXT, mtime INTEGER, sha256 TEXT);
 CREATE TABLE chunks(id INTEGER PRIMARY KEY, note_id INTEGER, heading_path TEXT,
  body TEXT, ord INTEGER);
 """
@@ -36,32 +36,41 @@ with tempfile.TemporaryDirectory() as tmp:
     db = root / "index.db"
     con = sqlite3.connect(db)
     con.executescript(SCHEMA)
-    fresh = date.today().isoformat()
-    old = (date.today() - timedelta(days=30)).isoformat()
+    today = date.today()
+    fresh = today.isoformat()
+    older = (today - timedelta(days=30)).isoformat()
+    oldest = (today - timedelta(days=300)).isoformat()
     con.executemany(
-        "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         [
-            (1, "sessions/Fresh session.md", "Fresh", "session", "", fresh, "", 0, "a"),
-            (2, "sessions/Old session.md", "Old", "session", "", old, "", 0, "b"),
-            (3, "sessions/Other project.md", "Other", "session", "ACME Corp", fresh, "", 0, "c"),
-            (4, "sessions/Zeta cyrillic.md", "Zeta", "session", "", fresh, "", 0, "d"),
-            # The client's own repository: its name is a prefix of the project above, and
-            # its notes must not leak into that project's digest.
-            (5, "sessions/Prefix kin.md", "Kin", "session", "acme", fresh, "", 0, "e"),
-            (6, "sessions/Fenced.md", "Fenced", "session", "", fresh, "", 0, "f"),
+            (1, "sessions/Newest.md", "Newest", "session", "", "", "", fresh, "", 0, "a"),
+            (2, "sessions/Older.md", "Older", "session", "", "", "", older, "", 0, "b"),
+            # An old session still shows up: there is no date window any more, only a cut.
+            (3, "sessions/Ancient.md", "Ancient", "session", "", "", "", oldest, "", 0, "c"),
+            (4, "sessions/Other project.md", "Other", "session", "", "", "ACME Corp", fresh, "", 0, "d"),
+            (5, "sessions/Prefix kin.md", "Kin", "session", "", "", "acme", fresh, "", 0, "e"),
+            (6, "sessions/Fenced.md", "Fenced", "session", "", "", "", fresh, "", 0, "f"),
+            (7, "notes/Atom — deploy.md", "Atom — deploy without migrations kills prod",
+             "atom", "gotcha", "", "ACME Corp", fresh, "", 0, "g"),
+            (8, "notes/Atom — bash.md", "Atom — arrays break in bash 3.2",
+             "atom", "gotcha", "", "", older, "", 0, "h"),
+            (9, "notes/Atom — foreign.md", "Atom — a gotcha of another project",
+             "atom", "gotcha", "", "widgets", fresh, "", 0, "i"),
+            # A decision is not a gotcha: only gotchas belong in the digest's second list.
+            (10, "notes/Atom — decision.md", "Atom — we chose SQLite",
+             "atom", "decision", "", "ACME Corp", fresh, "", 0, "j"),
         ],
     )
     con.executemany(
         "INSERT INTO chunks VALUES(?,?,?,?,?)",
         [
-            (1, 1, "Next steps / PENDING", "- [ ] ship fix\n- [x] done\n- [ ] write docs\n- [ ] " + "long tail " * 30, 0),
+            (1, 1, "Next steps", "- [ ] newest thread\n- [x] done\n- [ ] second newest", 0),
             # An unticked box counts wherever it sits: a heading whitelist used to decide
             # this, and it lost real threads to headings nobody had thought to list.
             (2, 1, "Notes", "- [ ] filed under a heading nobody listed", 1),
-            (3, 2, "Pending", "- [ ] too old", 0),
-            (4, 3, "Pending", "- [ ] belongs to another project", 0),
-            # SQLite lower() only folds ASCII, so a whitelist could never match this one.
-            (5, 4, "Осталось", "- [ ] a thread under a non-ASCII heading", 0),
+            (3, 2, "Pending", "- [ ] a month old but still open", 0),
+            (4, 3, "Осталось", "- [ ] ancient, and non-ASCII headings are no obstacle", 0),
+            (5, 4, "Pending", "- [ ] belongs to another project", 0),
             (6, 5, "Pending", "- [ ] kin by prefix only", 0),
             # A note that documents how threads are written hands over an example, not a
             # task — and the fence around that example can be split across two chunks.
@@ -73,47 +82,55 @@ with tempfile.TemporaryDirectory() as tmp:
     con.commit()
     con.close()
 
-    payload, raw = invoke(db, "--window", "7", "--project", "")
-    # Same-day notes are ordered by path, so Fenced.md leads and Zeta closes the list.
-    assert payload["tails"] == [
-        "[ ] a real thread (Session — Fenced)",
-        "[ ] ship fix (Session — Fresh session)",
-        "[ ] write docs (Session — Fresh session)",
-        ("[ ] " + "long tail " * 30).strip()[:199] + "… (Session — Fresh session)",
-        "[ ] filed under a heading nobody listed (Session — Fresh session)",
-        "[ ] belongs to another project (Session — Other project)",
-        "[ ] kin by prefix only (Session — Prefix kin)",
-        "[ ] a thread under a non-ASCII heading (Session — Zeta cyrillic)",
-    ], payload
-    assert "last 7 days" in payload["note"]
-    assert b"too old" not in raw and b"done" not in raw
+    payload, raw = invoke(db, "--project", "")
+    # No date window: a thread from ten months ago still surfaces if the list has room.
+    assert "[ ] ancient, and non-ASCII headings are no obstacle (Session — Ancient)" in payload["tails"], payload
+    assert "[ ] a month old but still open (Session — Older)" in payload["tails"], payload
     # A checkbox inside a code fence is an example of how to write a thread, not a thread.
     # The second case is the one chunking creates: the fence opens in one chunk and closes
     # in another, so a scanner working chunk by chunk sees only the unclosed half.
     assert b"example inside a fence" not in raw, raw
     assert b"first half of a split fence" not in raw, raw
     assert b"second half of a split fence" not in raw, raw
+    assert b"[x] done" not in raw
 
-    one_tail_size = len(HOT_SCAN["encoded"]({"tails": [payload["tails"][0], "> _truncated: 7 more open threads"], "note": payload["note"]}))
-    truncated, truncated_raw = invoke(db, "--window", "7", "--project", "", "--budget", str(one_tail_size + 1))
-    assert truncated["tails"][0] == payload["tails"][0]
-    assert truncated["tails"][-1] == "> _truncated: 7 more open threads"
-    assert len(truncated_raw) <= one_tail_size + 1
+    # Gotchas are their own list: a thread dies when you do it, a gotcha never does.
+    assert payload["gotchas"] == [
+        "deploy without migrations kills prod",
+        "a gotcha of another project",
+        "arrays break in bash 3.2",
+    ], payload
+    assert "we chose SQLite" not in " ".join(payload["gotchas"]), payload
 
-    # Projectless threads follow matched ones so budget truncation drops them first.
-    scoped, scoped_raw = invoke(db, "--window", "7", "--project", "acme-corp")
-    assert scoped["tails"] == [
-        "[ ] belongs to another project (Session — Other project)",
-        "[ ] a real thread (Session — Fenced, no project)",
-        "[ ] ship fix (Session — Fresh session, no project)",
-        "[ ] write docs (Session — Fresh session, no project)",
-        ("[ ] " + "long tail " * 30).strip()[:199] + "… (Session — Fresh session, no project)",
-        "[ ] filed under a heading nobody listed (Session — Fresh session, no project)",
-        "[ ] a thread under a non-ASCII heading (Session — Zeta cyrillic, no project)",
-    ], scoped
+    # Both counts are caps, and both are configurable.
+    capped, _ = invoke(db, "--project", "", "--tails", "2", "--gotchas", "1")
+    assert len(capped["tails"]) == 2 and len(capped["gotchas"]) == 1, capped
+    # Same-day notes are ordered by path, so Fenced.md leads today's sessions.
+    assert capped["tails"][0] == "[ ] a real thread (Session — Fenced)", capped
+    assert capped["gotchas"] == ["deploy without migrations kills prod"], capped
+
+    config_home = root / "confighome"
+    (config_home).mkdir()
+    (config_home / "config.json").write_text(json.dumps({"vault": "/nowhere", "hot_tails": 1, "hot_gotchas": 2}))
+    configured = subprocess.run(
+        ["python3", str(SCRIPT), "--db", str(db), "--project", ""],
+        check=True, capture_output=True, env={"PATH": "/usr/bin:/bin", "DONT_FORGET_HOME": str(config_home)},
+    )
+    configured_payload = json.loads(configured.stdout)
+    assert len(configured_payload["tails"]) == 1, configured_payload
+    assert len(configured_payload["gotchas"]) == 2, configured_payload
+
+    # Projectless notes follow matched ones, so the budget cuts them first, and a project
+    # that merely shares a prefix is a different project.
+    scoped, scoped_raw = invoke(db, "--project", "acme-corp")
+    assert scoped["tails"][0] == "[ ] belongs to another project (Session — Other project)", scoped
     assert b"kin by prefix only" not in scoped_raw, scoped_raw
+    assert scoped["gotchas"] == [
+        "deploy without migrations kills prod",
+        "arrays break in bash 3.2 (no project)",
+    ], scoped
     assert b", no project)" in scoped_raw
-    assert "open threads in acme-corp" in scoped["note"]
+    assert "in acme-corp" in scoped["note"]
     # Spelling drift is case and separators, and that is all normalising has to fold. On a
     # live vault of 894 notes every real pair of spellings differed by no more than this.
     assert HOT_SCAN["same_project"]("ACME Corp", "acme-corp")
@@ -128,14 +145,25 @@ with tempfile.TemporaryDirectory() as tmp:
     assert not HOT_SCAN["same_project"]("widgets", "acme")
     assert not HOT_SCAN["same_project"]("", "acme")
 
+    # A budget too small to hold everything drops lines and says how many, rather than
+    # pretending the list it printed was the whole list.
+    full_size = len(raw)
+    squeezed, squeezed_raw = invoke(db, "--project", "", "--budget", str(full_size - 200))
+    assert squeezed["budget_cut"] >= 1, squeezed
+    assert len(squeezed_raw) <= full_size - 200
+    assert len(squeezed["tails"]) + len(squeezed["gotchas"]) < len(payload["tails"]) + len(payload["gotchas"])
+    assert b"truncated" not in squeezed_raw, squeezed_raw
+
     missing, _ = invoke(root / "missing.db", "--project", "")
-    assert missing == {"tails": [], "note": ""}
+    assert missing == {"tails": [], "gotchas": [], "note": ""}
 
     hook, _ = invoke(db, "--hook", "--project", "")
     context = hook["hookSpecificOutput"]["additionalContext"]
     assert hook["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert context.startswith("dont-forget: open threads")
+    assert context.startswith("dont-forget: the freshest open threads and gotchas")
     assert "not instructions" in context
-    assert "- [ ] ship fix (Session — Fresh session)" in context
+    assert "Open threads — these die when you do them:" in context
+    assert "Gotchas — these describe how things are, nothing to do:" in context
+    assert "- [ ] a real thread (Session — Fenced)" in context
 
 print("ok")

@@ -31,6 +31,25 @@ class NotConfigured(ValueError):
     """
 
 
+def config(config_path: Path = CONFIG_PATH) -> dict:
+    """The whole config, for settings that have a working default without it.
+
+    A missing or broken file is not an error here: only the vault key is worth
+    interrupting the user over, and vault_from_config already does that.
+    """
+    try:
+        value = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def config_count(key: str, default: int, config_path: Path = CONFIG_PATH) -> int:
+    """A non-negative whole number from the config; anything else falls back silently."""
+    value = config(config_path).get(key, default)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else default
+
+
 def vault_from_config(config_path: Path = CONFIG_PATH) -> Path:
     """The one reader of config.json. Expands "~" so every caller agrees on the path."""
     try:
