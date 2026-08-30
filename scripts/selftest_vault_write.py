@@ -96,6 +96,57 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert "warning" not in json.loads(innocent.stdout), innocent.stdout
 
 with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
+    # A near-duplicate is not written silently: the mechanics of finding one are code,
+    # the judgement of whether it is the same claim stays with the person.
+    home = Path(directory)
+    vault = home / "vault"
+    vault.mkdir()
+    db = home / "index.db"
+    (vault / "Atom — deploy.md").write_text(
+        "---\ntype: atom\nkind: gotcha\n---\n\n# Atom — deploying without migrations kills prod\n"
+        "\nOn catcraft a deploy without migrations took prod down.\n", encoding="utf-8")
+
+    def write(filename: str, content: str, **extra) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--vault", str(vault), "--db", str(db)],
+            input=json.dumps({"filename": filename, "content": content, **extra}),
+            text=True, capture_output=True, check=False)
+
+    duplicate = write("Atom — deploy again.md",
+                      "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                      "\nA deploy without migrations took prod down on catcraft.\n")
+    assert duplicate.returncode == 0, duplicate.stderr
+    flagged = json.loads(duplicate.stdout)
+    assert flagged["status"] == "similar", flagged
+    assert flagged["candidates"][0]["path"] == "Atom — deploy.md", flagged
+    assert not (vault / "Atom — deploy again.md").exists(), "a candidate is not a refusal to ever write"
+
+    # ...and the same call with the judgement made writes it.
+    confirmed = write("Atom — deploy again.md",
+                      "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                      "\nA deploy without migrations took prod down on catcraft.\n",
+                      duplicates_checked=True)
+    assert json.loads(confirmed.stdout)["status"] == "created", confirmed.stdout
+    assert (vault / "Atom — deploy again.md").exists()
+
+    # A session note is a dated snapshot, never a duplicate — and it reads like every
+    # earlier session of the same project, so without an exemption the writer would
+    # answer "similar" to every session ever recorded and session close would stall.
+    (vault / "Session — 2026-08-29 dedup.md").write_text(
+        "---\ntype: session\ndate: 2026-08-29\n---\n\n# Session — 2026-08-29 dedup\n\n"
+        "## Done\n\nFixed dedup and secrets.\n", encoding="utf-8")
+    session = write("Session — 2026-08-30 dedup.md",
+                    "---\ntype: session\ndate: 2026-08-30\n---\n\n# Session — 2026-08-30 dedup\n\n"
+                    "## Done\n\nFixed dedup and secrets again.\n")
+    assert json.loads(session.stdout)["status"] == "created", session.stdout
+
+    # An unrelated claim is not held up by anything.
+    fresh = write("Atom — slack.md",
+                  "---\ntype: atom\n---\n\n# Atom — Slack webhooks carry a signature\n"
+                  "\nThe signature travels in a header.\n")
+    assert json.loads(fresh.stdout)["status"] == "created", fresh.stdout
+
+with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     # The scan is on by default and can be turned off without answering questions.
     home = Path(directory)
     vault = home / "vault"

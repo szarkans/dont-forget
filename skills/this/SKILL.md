@@ -71,10 +71,11 @@ model: inherit
 
 ## Preserve the knowledge graph
 
-- [ ] Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<the substance of the claim>"` for every
-  proposed claim and inspect its JSON fragments and paths. If an existing note
-  already covers the claim, offer to update that note instead of creating another;
-  do not silently choose for the user.
+- [ ] Expect the writer to answer `similar` instead of writing, with the notes it thinks
+  say this already. That check is no longer yours to remember to run — but the decision
+  is yours to put to the user: update one of those notes, or write a new one and repeat
+  the call with `duplicates_checked: true`. Never pick silently, and never repeat the
+  call with the flag just to get past the answer.
 - [ ] Merge into an existing note only when the two share a cause, not a symptom. Two
   deploys that broke because migrations were skipped are one note, gaining a second
   dated case. A deploy broken by migrations and one broken by an out-of-memory kill
