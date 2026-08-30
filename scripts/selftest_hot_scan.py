@@ -154,6 +154,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(squeezed["tails"]) + len(squeezed["gotchas"]) < len(payload["tails"]) + len(payload["gotchas"])
     assert b"truncated" not in squeezed_raw, squeezed_raw
 
+    # A negative count is nonsense, and a slice quietly read -1 as "all but the last".
+    negative, _ = invoke(db, "--project", "", "--tails", "-1", "--gotchas", "-1")
+    assert negative["tails"] == [] and negative["gotchas"] == [], negative
+
     missing, _ = invoke(root / "missing.db", "--project", "")
     assert missing == {"tails": [], "gotchas": [], "note": ""}
 

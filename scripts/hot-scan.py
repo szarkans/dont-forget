@@ -27,6 +27,14 @@ MAX_ITEM_CHARS = 200
 # the head: the rest is one search away. Both numbers are config keys.
 DEFAULT_TAILS = 15
 DEFAULT_GOTCHAS = 15
+# How many notes are read per line wanted. A session may hold no open threads at all, and
+# a project filter drops whole notes, so the pool has to be wider than the cut — but it
+# must stay bounded, or dropping the date window means reading the whole vault every
+# time the digest runs.
+SESSION_POOL = 8
+# Roughly what hook_payload() adds around the payload: two section headings, a bullet
+# marker per line, and the JSON envelope.
+HOOK_OVERHEAD = 400
 
 
 def encoded(payload: dict) -> bytes:
@@ -91,13 +99,13 @@ def _by_project(rows: list, project: str) -> list:
     return mine + unfiled
 
 
-def _rows(db_path: Path, sql: str) -> list:
+def _rows(db_path: Path, sql: str, params: tuple = ()) -> list:
     if not db_path.is_file():
         return []
     try:
         con = connect_ro(db_path)
         con.row_factory = sqlite3.Row
-        rows = con.execute(sql).fetchall()
+        rows = con.execute(sql, params).fetchall()
         con.close()
         return rows
     except sqlite3.Error:
@@ -112,10 +120,15 @@ def read_tails(db_path: Path, limit: int, project: str = "") -> list[str]:
     the top of the list answers "what am I in the middle of", which is the question the
     digest exists for. Everything below the cut is still in the vault and still findable.
     """
+    # Only the freshest sessions are read, not every session ever written: dropping the
+    # date window otherwise means loading every chunk of every session before applying a
+    # cap of fifteen, which grows without limit in a vault that keeps being used.
     rows = _rows(db_path, """SELECT n.path, n.project, c.body
-                FROM notes n JOIN chunks c ON c.note_id = n.id
-                WHERE lower(n.type) = 'session'
-                ORDER BY date(n.date) DESC, n.path, c.ord""")
+                FROM chunks c JOIN (SELECT id, path, project, date FROM notes
+                                     WHERE lower(type) = 'session'
+                                     ORDER BY date(date) DESC, path LIMIT ?) n
+                  ON c.note_id = n.id
+                ORDER BY date(n.date) DESC, n.path, c.ord""", (max(limit, 1) * SESSION_POOL,))
 
     # Chunks are pieces of a note, so a code fence can open in one and close in another.
     # Rejoining the note before stripping keeps the fence state whole; scanning chunk by
@@ -126,6 +139,7 @@ def read_tails(db_path: Path, limit: int, project: str = "") -> list[str]:
     ordered = _by_project([{"path": path, "project": note_project, "bodies": bodies}
                            for path, (note_project, bodies) in notes.items()], project)
 
+    limit = max(0, limit)
     tails: list[str] = []
     for note in ordered:
         session_name = Path(note["path"]).stem.removeprefix("Session — ")
@@ -148,9 +162,10 @@ def read_gotchas(db_path: Path, limit: int, project: str = "") -> list[str]:
     freshness-ordered list of chores until it fell off the end.
     """
     rows = _rows(db_path, """SELECT path, title, project FROM notes
-                WHERE lower(kind) = 'gotcha' ORDER BY date(date) DESC, path""")
+                WHERE lower(kind) = 'gotcha' ORDER BY date(date) DESC, path LIMIT ?""",
+                 (max(limit, 1) * SESSION_POOL,))
     out = []
-    for row in _by_project(rows, project)[:limit]:
+    for row in _by_project(rows, project)[:max(0, limit)]:
         title = row["title"].split(" — ", 1)[-1].strip() or row["title"]
         if len(title) > MAX_ITEM_CHARS:
             title = title[: MAX_ITEM_CHARS - 1] + "…"
@@ -238,7 +253,11 @@ def main() -> None:
     project = current_project() if args.project is None else normalize(args.project)
     tail_limit = args.tails if args.tails is not None else config_count("hot_tails", DEFAULT_TAILS)
     gotcha_limit = args.gotchas if args.gotchas is not None else config_count("hot_gotchas", DEFAULT_GOTCHAS)
-    payload = scan(args.db, tail_limit, gotcha_limit, args.budget, project, index_error)
+    # The budget is a cap on what reaches the session, and in hook mode what reaches it is
+    # the wrapped context — section headings, bullets and the JSON envelope — not the bare
+    # payload. Reserve their cost instead of overshooting by it.
+    budget = args.budget - HOOK_OVERHEAD if args.hook else args.budget
+    payload = scan(args.db, tail_limit, gotcha_limit, budget, project, index_error)
     output = hook_payload(payload) if args.hook else payload
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
 

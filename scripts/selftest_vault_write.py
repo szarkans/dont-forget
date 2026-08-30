@@ -129,6 +129,23 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert json.loads(confirmed.stdout)["status"] == "created", confirmed.stdout
     assert (vault / "Atom — deploy again.md").exists()
 
+    # Nothing was written, so nothing can have leaked: the secret warning says "written
+    # anyway" and must not appear on a path that wrote nothing.
+    held = write("Atom — deploy leaked.md",
+                 "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                 "\nA deploy without migrations took prod down. password: hunter2-battery-x\n")
+    held_body = json.loads(held.stdout)
+    assert held_body["status"] == "similar", held_body
+    assert "warning" not in held_body, held_body
+
+    # A JSON string is truthy, and skipping the duplicate check silently is the one
+    # failure this flag must not have.
+    stringy = write("Atom — deploy again 2.md",
+                    "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                    "\nA deploy without migrations took prod down on catcraft.\n",
+                    duplicates_checked="false")
+    assert json.loads(stringy.stdout)["status"] == "similar", stringy.stdout
+
     # A session note is a dated snapshot, never a duplicate — and it reads like every
     # earlier session of the same project, so without an exemption the writer would
     # answer "similar" to every session ever recorded and session close would stall.

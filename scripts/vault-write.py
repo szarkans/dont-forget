@@ -78,18 +78,20 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
     from index import parse_frontmatter, refresh_index
     from search import search
 
-    meta, _ = parse_frontmatter(content)
+    meta, body = parse_frontmatter(content)
     # A session note is a dated snapshot, not a claim, so it has no duplicates by
     # construction — and it always reads like every earlier session of the same project.
     # Without this the writer would answer "similar" to every session ever recorded.
     if str(meta.get("type", "")).strip().lower() == "session":
         return []
 
-    body = "\n".join(line for line in content.splitlines() if not line.startswith("---"))
     query = f"{Path(filename).stem} {body[:400]}"
     try:
         refresh_index(vault, db_path)
-        result = search(query, budget=1200, db_path=db_path)
+        # A third of real chunks are larger than 1200 bytes, and apply_budget stops at
+        # the first fragment that does not fit — so a small budget here returned nothing
+        # and let the duplicate through.
+        result = search(query, budget=4000, db_path=db_path)
     except Exception:
         # Dedup is a courtesy, not a gate: a broken index must not stop a note being
         # written. The write is the thing the user asked for.
@@ -166,13 +168,21 @@ def main() -> None:
             status = replace_note(vault, filename, content, expected_sha.lower())
         else:
             db_path = args.db or (DEFAULT_DB if args.vault is None else None)
-            candidates = ([] if payload.get("duplicates_checked") or db_path is None
+            # `is True` on purpose: a JSON string "false" is truthy, and silently
+            # skipping the check is the one failure mode this must not have.
+            skip = payload.get("duplicates_checked") is True
+            if not skip and db_path is None:
+                print("dedup skipped: --vault was given without --db, and the check needs"
+                      " an index that belongs to this vault.", file=sys.stderr)
+            candidates = ([] if skip or db_path is None
                           else similar_notes(vault, db_path, filename, content))
             status = "similar" if candidates else write_note(vault, filename, content)
         # Every write, whatever the genre: "the RCON password leaked" arrived as an open
         # thread, not as a gotcha. The warning goes in the returned status as well as to
         # stderr, so it can be counted later instead of scrolling past.
-        secret_warning = warning(content) if config().get("scan_secrets", True) else ""
+        wrote = status in ("created", "replaced")
+        secret_warning = (warning(content)
+                          if wrote and config().get("scan_secrets", True) else "")
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error

@@ -30,13 +30,14 @@ from __future__ import annotations
 import re
 
 # A value that is obviously a stand-in, not a credential. Notes are full of these.
-PLACEHOLDER = re.compile(r"^(?:\*+|x+|<.*>|\$\{.*\}|\.{3}|…|changeme|password|secret|"
-                         r"your[_-].*|my[_-].*|example.*|placeholder.*|redacted.*)$", re.IGNORECASE)
+PLACEHOLDER = re.compile(r"^(?:\*+|x+|<.*>|\$\{.*\}|\.{3}|…|changeme|password|secret|none|null|"
+                         r"your[_-].*|my[_-].*|example.*|placeholder.*|redacted.*|"
+                         r"dummy.*|fake.*|sample.*|test[_-].*|.*[_-]for[_-]tests?)$", re.IGNORECASE)
 
 RULES: list[tuple[str, re.Pattern]] = [
-    ("private key block", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY")),
+    ("private key block", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY")),
     ("AWS access key id", re.compile(r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b")),
-    ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36,255}\b")),
+    ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,255}|github_pat_[A-Za-z0-9_]{50,})\b")),
     ("Slack token", re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}\b")),
     ("Slack webhook", re.compile(r"https://hooks\.slack\.com/services/[A-Za-z0-9/+]{20,}")),
     ("JSON web token", re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
@@ -47,9 +48,14 @@ RULES: list[tuple[str, re.Pattern]] = [
 ]
 
 # The one rule that needs a hint word beside it, because the value alone says nothing.
+# No leading \b: an underscore is a word character, so \bpassword would never match the
+# name it is most often written under, DB_PASSWORD. The value may be quoted, and a quoted
+# value may contain spaces — "correct horse battery staple" is a passphrase, and stopping
+# at the first space missed it.
 ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|pwd|api[_-]?key|secret[_-]?key|access[_-]?token|пароль)\b"
-    r"\s*[:=]\s*[\"']?([^\s\"'`,;]{8,})")
+    r"(?i)(password|passwd|pwd|api[_-]?key|secret[_-]?key|secret[_-]?access[_-]?key|"
+    r"client[_-]?secret|access[_-]?token|auth[_-]?token|пароль)\b"
+    r"\s*[:=]\s*(?:\"([^\"\n]{8,})\"|'([^'\n]{8,})'|([^\s\"'`,;]{8,}))")
 
 
 def find_secrets(text: str) -> list[str]:
@@ -58,8 +64,9 @@ def find_secrets(text: str) -> list[str]:
     for name, pattern in RULES:
         if pattern.search(text):
             found.append(name)
-    for _, value in ASSIGNMENT.findall(text):
-        if not PLACEHOLDER.match(value):
+    for match in ASSIGNMENT.findall(text):
+        value = next((group for group in match[1:] if group), "")
+        if value and not PLACEHOLDER.match(value):
             found.append("password or key assignment")
             break
     return found
