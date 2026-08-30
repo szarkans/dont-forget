@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 — 2026-08-30
+## 0.10.0 — 2026-08-30
 
 ### Breaking
 - Two commands are renamed and two are gone, so that each name finishes the plugin's own
