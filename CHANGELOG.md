@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.10.0 — 2026-08-30
+
+### Breaking
+- Two commands are renamed and two are gone, so that each name finishes the plugin's own
+  sentence: `this` is now `that` ("don't forget **that**…"), and `checkup` is now `health`.
+  `review` no longer exists on its own — session close audits by default and writes only
+  when you say so, which is what `review` was for. `feedback` is gone as a command; the
+  journal it wrote is unchanged, and recall now writes to it where the evidence appears.
+  Update any of your own aliases or notes that call the old names.
+
+### Added
+- The index keeps each note's `kind`, `source` and `project`, and search returns all
+  three. They were written in every note and invisible to the code, so nothing outside the
+  Markdown could tell a gotcha from a decision. The index rebuilds itself once on upgrade —
+  measured at half a second for 915 notes.
+- The session-start digest is a hot list: the freshest open threads and the freshest
+  gotchas, both filtered by the project you are in, both capped by a config key
+  (`hot_tails`, `hot_gotchas`, fifteen each). Gotchas get their own list because they are
+  not chores — a standing warning used to sink down a list of tasks until it fell off.
+- The writer warns when a note carries something that looks like a secret: private keys,
+  cloud and service tokens, JWTs, and passwords written next to a name that says so. It
+  warns and never blocks, on every write, and the warning comes back in the returned
+  status as well as on stderr. `scan_secrets: false` in the config turns it off.
+- The writer looks for near-duplicates before writing and answers `similar` with the notes
+  it thinks already say this, instead of writing silently. Whether two notes are the same
+  claim is a judgement, so it stays yours: repeat the call with `duplicates_checked` to
+  write anyway.
+- `audit` — a new command, run by hand every couple of months. It reads what the vault
+  says rather than whether its machinery works: which notes carry a death condition that
+  may have arrived, which notes keep answering the same questions and may be one claim,
+  and which names the vault keeps pointing at and never answers. It proposes and changes
+  nothing.
+- A confirmed death condition is recorded as `died: YYYY-MM-DD`, and search carries it, so
+  a note that has gone false is returned with a warning rather than quietly believed.
+- Session close is audited by fresh sub-agents that read the session transcript as a file,
+  rather than by the agent that lived through it and can no longer see what became
+  routine. A long session is split at its compaction boundaries, one piece per reader.
+- A finished thread can be closed without editing the note that recorded it. Closure is
+  kept outside the vault, so a session note stays the dated snapshot it was. Threads
+  naming a closed issue, a merged pull request or an existing commit close on that
+  evidence alone; the rest need your word, and nothing closes when you are not there.
+- A fixture runner (`scripts/behaviour-check.py`) checks what the agent does with search
+  results — that a stale note is dated rather than stated as current, that an empty vault
+  produces an admission rather than an invention, and that an instruction written inside a
+  note is not obeyed. Run it before a release.
+
+### Fixed
+- Code fences are stripped before the digest looks for open threads, so a note that
+  documents how threads are written no longer hands its example over as a live task. A
+  fence now closes only on a bare marker at least as long as the one that opened it, which
+  also fixes wikilinks being extracted out of nested examples.
+- Project kinship no longer matches on a shared prefix. On a vault of 894 notes every
+  prefix pair it matched was two genuinely different projects, and the widest of them put
+  259 foreign notes into one project's reach; spelling drift is folded by normalising case
+  and separators instead.
+- The search log records how each note was found — by matching text or by following a
+  link — which is what makes it possible to tell notes that answer the same questions from
+  notes the graph walk always drags along together.
+- The digest's seven-day window is gone rather than fixed. It was really eight days, it
+  was a number nobody chose, and the top of a list answers the question better.
+- An index built by an older version is refused in words instead of a raw traceback.
+
 ## 0.9.0 — 2026-08-28
 
 ### Changed

@@ -50,21 +50,36 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     return data, "".join(lines[end + 1 :])
 
 
-def extract_links(body: str) -> list[str]:
+def strip_fences(body: str) -> str:
+    """Drop fenced code blocks: text inside them is an example, not a claim.
+
+    A note that documents "open threads are written like this: - [ ] do X" must not
+    hand that example to a reader as a live link or a live task.
+
+    A fence closes only on a bare marker at least as long as the one that opened it, which
+    is what CommonMark says and what the notes actually do: the way to show a ``` example
+    is to wrap it in ````, and a second ```python inside a block starts nothing. Closing on
+    either would spill the rest of the outer block back into the digest as live threads.
+    """
     visible, fence = [], None
     for line in body.splitlines():
         marker = FENCE.match(line)
         if marker:
             token = marker.group(1)
             if fence is None:
-                fence = token[0]
-            elif token[0] == fence:
+                fence = token
+            elif (token[0] == fence[0] and len(token) >= len(fence)
+                    and not line[marker.end():].strip()):
                 fence = None
             continue
         if fence is None:
             visible.append(line)
+    return "\n".join(visible)
+
+
+def extract_links(body: str) -> list[str]:
     targets = []
-    for match in WIKILINK.finditer("\n".join(visible)):
+    for match in WIKILINK.finditer(strip_fences(body)):
         target = match.group(1).split("|", 1)[0].split("#", 1)[0].strip()
         if target:
             targets.append(target)
@@ -143,7 +158,7 @@ def make_chunks(title: str, body: str) -> list[tuple[str, str, int]]:
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, path TEXT UNIQUE NOT NULL,
- title TEXT NOT NULL, type TEXT, project TEXT, date TEXT, reviewed TEXT, dies_when TEXT, aliases TEXT,
+ title TEXT NOT NULL, type TEXT, kind TEXT, source TEXT, project TEXT, date TEXT, reviewed TEXT, dies_when TEXT, died TEXT, aliases TEXT,
  mtime INTEGER NOT NULL, sha256 TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS chunks(id INTEGER PRIMARY KEY, note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
  heading_path TEXT NOT NULL, body TEXT NOT NULL, ord INTEGER NOT NULL);
@@ -189,7 +204,8 @@ def schema_stale(db_path: Path) -> bool:
         con.close()
     except sqlite3.Error:
         return True
-    return not row or TOKENIZER not in row[0] or "aliases" not in columns or "dies_when" not in columns
+    return (not row or TOKENIZER not in row[0]
+            or not {"aliases", "dies_when", "died", "kind", "source"} <= columns)
 
 
 def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dict:
@@ -229,14 +245,18 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
                 con.execute("DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE note_id=?)", (note_id,))
                 con.execute("DELETE FROM chunks WHERE note_id=?", (note_id,))
                 con.execute("DELETE FROM links WHERE src_note_id=?", (note_id,))
-                con.execute("UPDATE notes SET title=?,type=?,project=?,date=?,reviewed=?,dies_when=?,aliases=?,mtime=?,sha256=? WHERE id=?",
-                            (title, _scalar(meta.get("type")), _scalar(meta.get("project")), _scalar(meta.get("date")),
-                             _scalar(meta.get("reviewed")), _scalar(meta.get("dies-when")), _scalar(meta.get("aliases")), mtime, digest, note_id))
+                con.execute("UPDATE notes SET title=?,type=?,kind=?,source=?,project=?,date=?,reviewed=?,dies_when=?,died=?,aliases=?,mtime=?,sha256=? WHERE id=?",
+                            (title, _scalar(meta.get("type")), _scalar(meta.get("kind")), _scalar(meta.get("source")),
+                             _scalar(meta.get("project")), _scalar(meta.get("date")),
+                             _scalar(meta.get("reviewed")), _scalar(meta.get("dies-when")),
+                             _scalar(meta.get("died")), _scalar(meta.get("aliases")), mtime, digest, note_id))
             else:
-                cur = con.execute("INSERT INTO notes(path,title,type,project,date,reviewed,dies_when,aliases,mtime,sha256) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                                  (rel, title, _scalar(meta.get("type")), _scalar(meta.get("project")),
+                cur = con.execute("INSERT INTO notes(path,title,type,kind,source,project,date,reviewed,dies_when,died,aliases,mtime,sha256) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                  (rel, title, _scalar(meta.get("type")), _scalar(meta.get("kind")),
+                                   _scalar(meta.get("source")), _scalar(meta.get("project")),
                                    _scalar(meta.get("date")), _scalar(meta.get("reviewed")),
-                                   _scalar(meta.get("dies-when")), _scalar(meta.get("aliases")), mtime, digest))
+                                   _scalar(meta.get("dies-when")), _scalar(meta.get("died")),
+                                   _scalar(meta.get("aliases")), mtime, digest))
                 note_id = cur.lastrowid
             for heading, chunk_body, ordinal in make_chunks(title, body):
                 cur = con.execute("INSERT INTO chunks(note_id,heading_path,body,ord) VALUES(?,?,?,?)",

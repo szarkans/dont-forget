@@ -11,7 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from common import vault_from_config
+from common import DEFAULT_DB, config, vault_from_config
+from secret_scan import warning
 
 try:
     import fcntl
@@ -62,6 +63,54 @@ def validate_filename(filename: object) -> str:
     return filename
 
 
+def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
+                  limit: int = 3) -> list[dict]:
+    """Notes the vault already holds that may be this same claim.
+
+    This used to be a checklist line telling the agent to run the search and judge the
+    result, and a checklist line is exactly what gets skipped in the middle of a task.
+    The mechanics move into code; the judgement — same claim or not — stays with the
+    person, because "one cause or two" is meaning, and code cannot see it.
+
+    The bar for showing candidates is deliberately low. A candidate costs one glance;
+    a duplicate costs a split memory that nobody notices for months.
+    """
+    from index import parse_frontmatter, refresh_index
+    from search import search
+
+    meta, body = parse_frontmatter(content)
+    # A session note is a dated snapshot, not a claim, so it has no duplicates by
+    # construction — and it always reads like every earlier session of the same project.
+    # Without this the writer would answer "similar" to every session ever recorded.
+    if str(meta.get("type", "")).strip().lower() == "session":
+        return []
+
+    query = f"{Path(filename).stem} {body[:400]}"
+    try:
+        refresh_index(vault, db_path)
+        # A third of real chunks are larger than 1200 bytes, and apply_budget stops at
+        # the first fragment that does not fit — so a small budget here returned nothing
+        # and let the duplicate through.
+        result = search(query, budget=4000, db_path=db_path)
+    except Exception:
+        # Dedup is a courtesy, not a gate: a broken index must not stop a note being
+        # written. The write is the thing the user asked for.
+        return []
+    if result["coverage"].get("weak_match"):
+        return []
+    seen, out = set(), []
+    for fragment in result["fragments"]:
+        path = fragment.get("path")
+        if path in seen or path == filename:
+            continue
+        seen.add(path)
+        out.append({"path": path, "kind": fragment.get("kind") or "",
+                    "date": fragment.get("date") or ""})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def write_note(vault: Path, filename: str, content: str) -> str:
     target = vault / filename
     incoming = content.encode("utf-8")
@@ -89,6 +138,10 @@ def replace_note(vault: Path, filename: str, content: str, expected_sha: str) ->
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--vault", type=Path)
+    # The dedup search reads and refreshes an index, and an index belongs to one vault.
+    # Pointing a test vault at the live index is how the live index gets overwritten with
+    # test notes, so an explicit --vault without an explicit --db simply skips dedup.
+    parser.add_argument("--db", type=Path)
     args = parser.parse_args()
     try:
         payload = json.load(sys.stdin)
@@ -114,11 +167,36 @@ def main() -> None:
                 raise ValueError("expected_sha must be a sha256 hex digest") from error
             status = replace_note(vault, filename, content, expected_sha.lower())
         else:
-            status = write_note(vault, filename, content)
+            db_path = args.db or (DEFAULT_DB if args.vault is None else None)
+            # `is True` on purpose: a JSON string "false" is truthy, and silently
+            # skipping the check is the one failure mode this must not have.
+            skip = payload.get("duplicates_checked") is True
+            if not skip and db_path is None:
+                print("dedup skipped: --vault was given without --db, and the check needs"
+                      " an index that belongs to this vault.", file=sys.stderr)
+            candidates = ([] if skip or db_path is None
+                          else similar_notes(vault, db_path, filename, content))
+            status = "similar" if candidates else write_note(vault, filename, content)
+        # Every write, whatever the genre: "the RCON password leaked" arrived as an open
+        # thread, not as a gotcha. The warning goes in the returned status as well as to
+        # stderr, so it can be counted later instead of scrolling past.
+        wrote = status in ("created", "replaced")
+        secret_warning = (warning(content)
+                          if wrote and config().get("scan_secrets", True) else "")
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
-    print(json.dumps({"status": status}, separators=(",", ":")))
+    result = {"status": status}
+    if status == "similar":
+        # Not written. The caller shows these, the user says new note or an update to an
+        # existing one, and a repeat with duplicates_checked writes it.
+        result["candidates"] = candidates
+        print(f"similar notes already in the vault: {', '.join(c['path'] for c in candidates)}."
+              " Repeat with duplicates_checked to write anyway.", file=sys.stderr)
+    if secret_warning:
+        print(secret_warning, file=sys.stderr)
+        result["warning"] = secret_warning
+    print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 
 
 if __name__ == "__main__":

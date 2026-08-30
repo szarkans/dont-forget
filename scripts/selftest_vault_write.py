@@ -78,4 +78,105 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     closed = invoke(vault, "Atom — closed.md", "---\ntype: atom\n---\nbody\n")
     assert closed.returncode == 0, closed.stderr
 
+    # A secret warns and never blocks: the note lands, and the warning rides along in the
+    # returned status so it can be counted rather than scrolled past.
+    leaked = invoke(vault, "Atom — leaked.md", "---\ntype: atom\n---\npassword: hunter2-battery-x\n")
+    assert leaked.returncode == 0, leaked.stderr
+    body = json.loads(leaked.stdout)
+    assert body["status"] == "created", body
+    assert "possible secret" in body["warning"], body
+    assert "possible secret" in leaked.stderr
+    assert (vault / "Atom — leaked.md").exists()
+
+    # Prose *about* a leak is not a leak. This is the shape the vault actually holds, and
+    # a scanner that fires on it teaches the reader to ignore every warning it prints.
+    innocent = invoke(vault, "Atom — incident.md",
+                      "---\ntype: atom\n---\nRCON-пароль засветился в открытом чате, ключ ротирован.\n")
+    assert innocent.returncode == 0, innocent.stderr
+    assert "warning" not in json.loads(innocent.stdout), innocent.stdout
+
+with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
+    # A near-duplicate is not written silently: the mechanics of finding one are code,
+    # the judgement of whether it is the same claim stays with the person.
+    home = Path(directory)
+    vault = home / "vault"
+    vault.mkdir()
+    db = home / "index.db"
+    (vault / "Atom — deploy.md").write_text(
+        "---\ntype: atom\nkind: gotcha\n---\n\n# Atom — deploying without migrations kills prod\n"
+        "\nOn catcraft a deploy without migrations took prod down.\n", encoding="utf-8")
+
+    def write(filename: str, content: str, **extra) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--vault", str(vault), "--db", str(db)],
+            input=json.dumps({"filename": filename, "content": content, **extra}),
+            text=True, capture_output=True, check=False)
+
+    duplicate = write("Atom — deploy again.md",
+                      "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                      "\nA deploy without migrations took prod down on catcraft.\n")
+    assert duplicate.returncode == 0, duplicate.stderr
+    flagged = json.loads(duplicate.stdout)
+    assert flagged["status"] == "similar", flagged
+    assert flagged["candidates"][0]["path"] == "Atom — deploy.md", flagged
+    assert not (vault / "Atom — deploy again.md").exists(), "a candidate is not a refusal to ever write"
+
+    # ...and the same call with the judgement made writes it.
+    confirmed = write("Atom — deploy again.md",
+                      "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                      "\nA deploy without migrations took prod down on catcraft.\n",
+                      duplicates_checked=True)
+    assert json.loads(confirmed.stdout)["status"] == "created", confirmed.stdout
+    assert (vault / "Atom — deploy again.md").exists()
+
+    # Nothing was written, so nothing can have leaked: the secret warning says "written
+    # anyway" and must not appear on a path that wrote nothing.
+    held = write("Atom — deploy leaked.md",
+                 "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                 "\nA deploy without migrations took prod down. password: hunter2-battery-x\n")
+    held_body = json.loads(held.stdout)
+    assert held_body["status"] == "similar", held_body
+    assert "warning" not in held_body, held_body
+
+    # A JSON string is truthy, and skipping the duplicate check silently is the one
+    # failure this flag must not have.
+    stringy = write("Atom — deploy again 2.md",
+                    "---\ntype: atom\n---\n\n# Atom — deploying without migrations kills prod\n"
+                    "\nA deploy without migrations took prod down on catcraft.\n",
+                    duplicates_checked="false")
+    assert json.loads(stringy.stdout)["status"] == "similar", stringy.stdout
+
+    # A session note is a dated snapshot, never a duplicate — and it reads like every
+    # earlier session of the same project, so without an exemption the writer would
+    # answer "similar" to every session ever recorded and session close would stall.
+    (vault / "Session — 2026-08-29 dedup.md").write_text(
+        "---\ntype: session\ndate: 2026-08-29\n---\n\n# Session — 2026-08-29 dedup\n\n"
+        "## Done\n\nFixed dedup and secrets.\n", encoding="utf-8")
+    session = write("Session — 2026-08-30 dedup.md",
+                    "---\ntype: session\ndate: 2026-08-30\n---\n\n# Session — 2026-08-30 dedup\n\n"
+                    "## Done\n\nFixed dedup and secrets again.\n")
+    assert json.loads(session.stdout)["status"] == "created", session.stdout
+
+    # An unrelated claim is not held up by anything.
+    fresh = write("Atom — slack.md",
+                  "---\ntype: atom\n---\n\n# Atom — Slack webhooks carry a signature\n"
+                  "\nThe signature travels in a header.\n")
+    assert json.loads(fresh.stdout)["status"] == "created", fresh.stdout
+
+with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
+    # The scan is on by default and can be turned off without answering questions.
+    home = Path(directory)
+    vault = home / "vault"
+    vault.mkdir()
+    (home / "config.json").write_text(json.dumps({"vault": str(vault), "scan_secrets": False}))
+    quiet = subprocess.run(
+        [sys.executable, str(SCRIPT), "--vault", str(vault)],
+        input=json.dumps({"filename": "Atom — quiet.md",
+                          "content": "---\ntype: atom\n---\npassword: hunter2-battery-x\n"}),
+        text=True, capture_output=True, check=False,
+        env={"PATH": "/usr/bin:/bin", "DONT_FORGET_HOME": str(home)},
+    )
+    assert quiet.returncode == 0, quiet.stderr
+    assert json.loads(quiet.stdout) == {"status": "created"}, quiet.stdout
+
 print("ok")

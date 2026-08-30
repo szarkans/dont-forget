@@ -4,6 +4,7 @@
 import hashlib
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -36,6 +37,13 @@ fake = "[[Код]]"
 ~~~
 """)
 assert links == ["Да", "Нет", "Вложение"], links
+# The way to show a ``` example is to wrap it in ````, so a fence must close only on a
+# marker at least as long as the one that opened it. Closing on the inner marker used to
+# spill the rest of the outer block back out — as links here, as live threads in the
+# digest, which is the note that documents how threads are written.
+assert extract_links("````\n```\n[[Внутри]]\n```\n[[Тоже внутри]]\n````\n[[Снаружи]]") == ["Снаружи"]
+# A marker carrying an info string opens a block, it never closes one.
+assert extract_links("```\n[[Внутри]]\n```python\n[[Тоже внутри]]\n```\n[[Снаружи]]") == ["Снаружи"]
 # Every word long enough to carry endings gets a prefix wildcard, whatever alphabet it
 # is in. Handing it to Cyrillic alone left every other language with neither the porter
 # stemmer (which only knows English) nor a prefix: a German vault answered "Textur" with
@@ -66,7 +74,8 @@ with tempfile.TemporaryDirectory() as tmp:
     vault = home / "vault"
     vault.mkdir()
     (vault / "note.md").write_text(
-        "---\ntype: atom\ndate: 2026-08-10\nreviewed: 2026-08-20\n"
+        "---\ntype: atom\nkind: gotcha\nsource: созвон 2026-08-10\nproject: catcraft\n"
+        "date: 2026-08-10\nreviewed: 2026-08-20\n"
         "dies-when: DNS record repointed\n---\n\n# Note\n\nfreshnessalpha\n")
     config_dir = home / ".dont-forget"
     config_dir.mkdir()
@@ -88,6 +97,11 @@ with tempfile.TemporaryDirectory() as tmp:
     assert fragment["type"] == "atom" and fragment["date"] == "2026-08-10", fragment
     assert fragment["reviewed"] == "2026-08-20", fragment
     assert fragment["dies_when"] == "DNS record repointed", fragment
+    # Genre and provenance travel with the fragment. Stored and not returned is the state
+    # this fixes: it is what stopped the digest from asking for gotchas by name.
+    assert fragment["kind"] == "gotcha", fragment
+    assert fragment["source"] == "созвон 2026-08-10", fragment
+    assert fragment["project"] == "catcraft", fragment
     query_log = config_dir / "queries.jsonl"
     log_lines_before = 0
     if query_log.is_file():
@@ -101,11 +115,21 @@ with tempfile.TemporaryDirectory() as tmp:
         log_lines_after = sum(1 for _ in handle)
     assert log_lines_after == log_lines_before
     (vault / "note.md").write_text("# Note\n\nfreshnessbeta\n")
+    # A neighbour that shares no query word: it can only arrive by following the link.
+    (vault / "neighbour.md").write_text("# Neighbour\n\nSee [[note]] for the details.\n")
     second = subprocess.run(
         [sys.executable, str(search_script), "freshnessbeta"],
         env=env, capture_output=True, text=True, check=True,
     )
     assert json.loads(second.stdout)["coverage"]["matched_chunks"] == 1
+
+    # The log has to say how each note arrived. Without that tag two notes the graph walk
+    # always drags in behind each other look exactly like two notes that genuinely answer
+    # the same questions, and every co-retrieval conclusion rests on telling them apart.
+    with query_log.open(encoding="utf-8") as handle:
+        logged = json.loads(handle.readlines()[-1])
+    assert [entry["path"] for entry in logged["top"]] == ["note.md", "neighbour.md"], logged
+    assert [entry["found_by"] for entry in logged["top"]] == ["text", "link"], logged
 
 # An unchanged note must stop at stat: reading every note just to prove its digest is
 # unchanged made a no-op refresh too slow for the SessionStart hook.
@@ -473,6 +497,50 @@ with tempfile.TemporaryDirectory() as tmp:
     assert schema_stale(stale), "an index without the aliases column must force a rebuild"
     build(vault, stale)
     assert resolved_links(stale)["gadget"] == "widget-moc.md"
+
+    # Same for the genre columns: an index built before them would keep answering with
+    # every note's kind silently empty, and the digest would find no gotchas at all.
+    # The fixture is a REAL index with one column dropped, so the assertion can only pass
+    # because of the missing column. Hand-writing a bare notes table instead would leave
+    # out chunks_fts, and then staleness is detected by the missing FTS table whether or
+    # not the column check exists at all — a check that passes for the wrong reason.
+    for column in ("kind", "source"):
+        genreless = home / f"no-{column}.db"
+        shutil.copy(db, genreless)
+        con = sqlite3.connect(genreless)
+        con.execute(f"ALTER TABLE notes DROP COLUMN {column}")
+        con.commit()
+        con.close()
+        assert schema_stale(genreless), f"an index without {column} must force a rebuild"
+        build(vault, genreless)
+        assert not schema_stale(genreless)
+
+    # Searching an old-schema index is the one case the graceful "the refresh failed, so
+    # I searched what was already there" path cannot serve: the columns this version
+    # selects are not in that index, and the user would get a raw sqlite traceback.
+    old_schema = home / "old-schema.db"
+    shutil.copy(db, old_schema)
+    con = sqlite3.connect(old_schema)
+    con.execute("ALTER TABLE notes DROP COLUMN kind")
+    con.commit()
+    con.close()
+    # The refresh has to actually fail, which needs the configured vault to be gone —
+    # passing --vault would just rebuild the index against an empty folder.
+    crash_home = home / "crash-home"
+    (crash_home / ".dont-forget").mkdir(parents=True)
+    shutil.copy(old_schema, crash_home / ".dont-forget" / "index.db")
+    (crash_home / ".dont-forget" / "config.json").write_text(
+        json.dumps({"vault": str(home / "gone")}))
+    crash_env = os.environ.copy()
+    crash_env["HOME"] = str(crash_home)
+    crash_env.pop("DONT_FORGET_HOME", None)
+    refused = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "widget"],
+        env=crash_env, capture_output=True, text=True,
+    )
+    assert refused.returncode != 0, refused
+    assert "older version" in refused.stderr, refused.stderr
+    assert "Traceback" not in refused.stderr, refused.stderr
 
 # A vault with no aliases anywhere must resolve exactly as it did before.
 with tempfile.TemporaryDirectory() as tmp:

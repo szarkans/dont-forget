@@ -15,7 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 from common import DEFAULT_DB, DEFAULT_QUERY_LOG, connect_ro
-from index import refresh_index
+from index import refresh_index, schema_stale
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
 # How many top-bm25 chunks are re-ranked. The pool is reported, so a query that
@@ -164,7 +164,7 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
     if not scores:
         return [], skipped, 0
     marks = ",".join("?" for _ in scores)
-    rows = con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.date,n.reviewed,n.dies_when,c.heading_path,c.body FROM chunks c
+    rows = con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body FROM chunks c
         JOIN notes n ON n.id=c.note_id WHERE c.note_id IN ({marks}) ORDER BY n.path,c.ord""",
         tuple(scores)).fetchall()
     items, taken = [], set()
@@ -173,8 +173,9 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
         if row["id"] in seen_chunks or row["note_id"] in taken:
             continue
         taken.add(row["note_id"])
-        items.append({"path": row["path"], "type": row["type"], "date": row["date"],
-                      "reviewed": row["reviewed"], "dies_when": row["dies_when"],
+        items.append({"path": row["path"], "type": row["type"], "kind": row["kind"],
+                      "source": row["source"], "project": row["project"], "date": row["date"],
+                      "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
                       "heading": row["heading_path"], "text": row["body"],
                       "score": round(scores[row["note_id"]], 6), "terms_matched": 0, "found_by": "link"})
     items.sort(key=lambda item: -item["score"])
@@ -234,11 +235,12 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     # the vault knows, so no hits here means the vault holds nothing starting with even that.
     unmatched = [origin for term, origin in terms.items() if term in content and not hits[term]]
 
-    rows = con.execute("""SELECT c.id,c.note_id,n.path,n.type,n.date,n.reviewed,n.dies_when,c.heading_path,c.body,bm25(chunks_fts) AS rank
+    rows = con.execute("""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body,bm25(chunks_fts) AS rank
         FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
         WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""", (" OR ".join(content), POOL)).fetchall()
-    text = [{"path": row["path"], "type": row["type"], "date": row["date"],
-             "reviewed": row["reviewed"], "dies_when": row["dies_when"],
+    text = [{"path": row["path"], "type": row["type"], "kind": row["kind"],
+             "source": row["source"], "project": row["project"], "date": row["date"],
+             "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
              "heading": row["heading_path"], "text": row["body"],
              "score": round(mass[row["id"]], 6), "terms_matched": matched_terms[row["id"]],
              "found_by": "text", "_id": row["id"], "_note": row["note_id"], "_bm25": row["rank"]}
@@ -301,19 +303,29 @@ def main() -> None:
     index_error = refresh_index(args.vault, db_path)
     if index_error and not db_path.exists():
         raise SystemExit(index_error)
+    if index_error and schema_stale(db_path):
+        # Falling back to the existing index is the graceful path, but an index built by
+        # an older version has none of the columns this version selects, so the fallback
+        # would be a raw sqlite traceback instead. Say which problem to fix.
+        raise SystemExit(f"{index_error} The existing index was built by an older version "
+                         "and cannot be searched until the refresh succeeds and rebuilds it.")
     result = search(query, budget, hub_cap, db_path, args.graph_share)
     if index_error:
         print(f"{index_error} Searching the existing index, which may be stale.", file=sys.stderr)
         result["coverage"]["index_stale"] = True
     if args.vault is None and args.db is None:
         try:
-            top: list[str] = []
+            # Each entry records how the note arrived: matched the query text, or came in
+            # by following a link. Without that tag a pair of notes that always surface
+            # together cannot be told apart from two notes the graph walk always drags in
+            # behind each other, and every co-retrieval conclusion rests on the difference.
+            top: list[dict] = []
             seen: set[str] = set()
             for fragment in result["fragments"]:
                 path = fragment.get("path")
                 if path not in seen:
                     seen.add(path)
-                    top.append(path)
+                    top.append({"path": path, "found_by": fragment.get("found_by")})
                 if len(top) >= 5:
                     break
             DEFAULT_QUERY_LOG.parent.mkdir(parents=True, exist_ok=True)

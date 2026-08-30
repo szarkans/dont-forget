@@ -41,6 +41,15 @@ sources by `path` and never present the fragment count as the note count. Treat
 `heading` as local context and `found_by` as an explanation of why a fragment appears
 in the results, not as evidence by itself.
 
+A fragment also carries `kind`, `source` and `project`. `kind` is the genre of the claim —
+new notes carry `decision`, `gotcha`, `principle`, `pain` or `stance`, and older ones may
+carry values no longer written — and it is the fastest way to tell a trap worth warning
+about from a decision worth citing. `source` says where the
+claim came from — a call, a session, a document — and `project` which project it belongs
+to; both of them let you say whether a claim is about the user's own work or someone
+else's. All three are empty on plenty of notes, and empty means "not recorded", never
+"does not apply": never present the absence of a `kind` as evidence about the note.
+
 Each fragment carries freshness fields — `type`, `date`, `reviewed`, `dies_when` — and
 they change how you may state a conclusion, not just how you cite it. Read the note's
 age as the later of `date` and `reviewed` (a re-reviewed note is not stale by its
@@ -51,6 +60,12 @@ actionable and can go false when the outside world moves — a `dies_when` note,
 checked it now. Do not hand the user a stale observation with the confidence of a
 standing rule. When `dies_when` names an event that has plausibly already happened, say
 the note may be dead rather than presenting it as current.
+
+`died` is that judgement already made: someone confirmed in an audit that the condition
+arrived, on the date the field carries. Such a note is still returned — nothing is ever
+hidden — but it must never be quoted as current. Say the condition has arrived and give
+the date, and treat the claim as a record of what was once true. A dead note whose warning
+you drop is worse than a missing one: the reader acts on it with confidence.
 
 A `type: session` fragment is a diary entry: it records how the work was thought about
 that day, not how things stand now. Attribute it that way ("as of the 26th the plan was
@@ -115,3 +130,23 @@ most, never as a list.
 
 A large `matched_chunks` with a small `returned` is evidence of incomplete coverage,
 not a reason to silently add notes beyond the results.
+
+## When the recall itself is evidence
+
+Some searches prove something about the memory rather than about the topic, and that
+proof is worth a line in the journal. Log it at the moment it appears — never
+reconstruct one later because someone asked — by piping one JSON object to
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"` with `verdict`, a non-empty
+`query`, `notes` (the returned note paths), and `note`, one line on what happened.
+
+Four verdicts, and nothing else: `saved-work` when a result demonstrably avoided
+repeated work; `noise` when the results were irrelevant; `false-note` when a returned
+note is demonstrably false or out of date; `proven-miss` when the search found nothing
+and the same session later turned the note up another way. A suspicion that the vault
+probably holds something is not proof of a miss — the whole vault is never visible —
+so it is not logged.
+
+The script answers with the running `proven_misses` count, and sometimes a `trigger`
+field. Show that line to the user when it appears: it is the agreed signal that
+full-text search alone has stopped being enough. The journal lives outside the vault,
+at `~/.dont-forget/feedback.jsonl`; never write it into a note.

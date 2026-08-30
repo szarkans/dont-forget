@@ -30,13 +30,16 @@ long-term memory (like an HDD) — for you and your agent both.
 /plugin install dont-forget@dont-forget
 
 or
+
 claude plugin marketplace add szarkans/dont-forget
 claude plugin install dont-forget@dont-forget
 ```
 
 then
 
-`/dont-forget:setup`
+```
+/dont-forget:setup
+```
 
 then
 
@@ -46,32 +49,35 @@ Requirements: `python3`. No pip installs, no dependencies — standard library o
 
 ## Commands
 
-`/dont-forget:this` — "hey, let's save this fact/gotcha/decision so we don't forget it".
-Writes atomic notes and de-duplicates against what's already in the vault.
+`/dont-forget:that` — "hey, let's save this fact/gotcha/decision so we don't forget it".
+Writes atomic notes, warns if one carries something that looks like a secret, and stops
+to ask when the vault already holds a note saying much the same thing.
 
 `/dont-forget:about` — "hey why did we switch to postgres?", "what exactly was bad in
 here?". Searches the vault and answers with citations plus an honest coverage report —
 including telling you straight when the vault has nothing on your question.
 
-`/dont-forget:session` — end-of-session skill. Writes what you did into a session note
-and indexes its open threads, so the next session picks them up.
+`/dont-forget:session` — end-of-session skill. Fresh sub-agents read the session
+transcript and report what never made it into memory; nothing is written until you say
+so. Then it records the session note, closes the threads that are demonstrably finished,
+and checks the vault.
 
-`/dont-forget:review` — looks back over the session and audits it: what got done, what
-you claimed was done, which facts and commitments never made it into memory.
+`/dont-forget:health` — health of your **vault**: commits it to git and reports what the
+index actually sees.
 
-`/dont-forget:checkup` — health of your **vault**: commits it to git and reports what
-the index actually sees.
+`/dont-forget:audit` — the slow read, once in a while: notes whose stated expiry may have
+arrived, notes that keep answering the same questions and may be one claim, and names the
+vault keeps pointing at and never answers. It proposes; you decide.
 
 `/dont-forget:setup` — points the plugin at your notes, or moves it to a different
 folder later. Finds your vaults for you instead of asking you to type a path.
 
-`/dont-forget:feedback` — logs proven search failures and wins, so the search can be
-fixed against evidence instead of vibes.
-
 ## What it does on its own
 
-At the start of every session it injects your open threads from the last 7 days,
-the unfinished checkboxes from your session notes. No command needed.
+At the start of every session it injects two short lists for the project you are in: the
+freshest open threads — the unfinished checkboxes from your session notes — and the
+freshest gotchas, the things that bite you rather than the things you have to do. Fifteen
+of each by default; the rest is a search away. No command needed.
 
 Also you will be notified when autocompact is close to run `/dont-forget:session` so you will not lose progress or to have good handoff for new session.
 

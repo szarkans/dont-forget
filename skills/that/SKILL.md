@@ -1,10 +1,10 @@
 ---
-name: this
+name: that
 description: "Persist durable knowledge when it would change how a future session behaves. Capture atomic, deduplicated vault notes or route actionable code rules to the appropriate rules file."
 model: inherit
 ---
 
-# dont-forget:this — Persist Durable Knowledge
+# dont-forget:that — Persist Durable Knowledge
 
 - [ ] Treat persistence as a behavior change, not a transcript archive. Save only
   knowledge that would make a future session act differently; otherwise say "nothing
@@ -17,7 +17,9 @@ model: inherit
   worst kind of noise: written in common words, it matches many queries and answers
   none, while the byte budget drops real fragments to make room for it.
 - [ ] Redact passwords, tokens, keys, and other secrets as `<REDACTED>` before any
-  content is written or shown in a write payload.
+  content is written or shown in a write payload. The writer scans for them too and
+  returns a `warning` beside the status — it warns, it does not block, so a warning
+  means the secret is now in the vault: say so and name the credential to rotate.
 - [ ] Separate two or more independent claims into two or more notes. Never combine
   unrelated claims. If a claim cannot fit in a one-phrase title, split it further.
 - [ ] Route an actionable code-bound "never X" or "always Y" rule away from the
@@ -69,10 +71,11 @@ model: inherit
 
 ## Preserve the knowledge graph
 
-- [ ] Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<the substance of the claim>"` for every
-  proposed claim and inspect its JSON fragments and paths. If an existing note
-  already covers the claim, offer to update that note instead of creating another;
-  do not silently choose for the user.
+- [ ] Expect the writer to answer `similar` instead of writing, with the notes it thinks
+  say this already. That check is no longer yours to remember to run — but the decision
+  is yours to put to the user: update one of those notes, or write a new one and repeat
+  the call with `duplicates_checked: true`. Never pick silently, and never repeat the
+  call with the flag just to get past the answer.
 - [ ] Merge into an existing note only when the two share a cause, not a symptom. Two
   deploys that broke because migrations were skipped are one note, gaining a second
   dated case. A deploy broken by migrations and one broken by an out-of-memory kill
