@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.10.3 — 2026-08-30
+
+### Fixed
+- A thread naming more than one issue was resolved against the first one written down.
+  "Finish issue #12 and #14" answered with #12 alone: close that one and the whole
+  thread read as proven while #14 still held the work — and writing the same two in the
+  other order lost the evidence entirely, so the answer depended on word order. Every
+  reference is checked now, and one unfinished item withholds the evidence for all of
+  them. If you closed a multi-issue thread on this, its line is in
+  `~/.dont-forget/closed-threads.jsonl` and deleting it brings the thread back.
+
+### Changed
+- The plugin manifest called the search "graph-walking hybrid search". Hybrid usually
+  means text plus vectors, and this plugin has no vectors by decision — it now says
+  "full-text plus link-graph search", which is what it does.
+
 ## 0.10.2 — 2026-08-30
 
 ### Fixed

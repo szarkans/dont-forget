@@ -1,8 +1,8 @@
 {
   "name": "dont-forget",
   "displayName": "don't forget",
-  "version": "0.10.2",
-  "description": "I'm with you in the dark. Persistent Zettelkasten memory for Claude Code over a plain Markdown vault: automatic recall on session start, graph-walking hybrid search, atomic fact capture, session continuity.",
+  "version": "0.10.3",
+  "description": "I'm with you in the dark. Persistent Zettelkasten memory for Claude Code over a plain Markdown vault: automatic recall on session start, full-text plus link-graph search, atomic fact capture, session continuity.",
   "author": {
     "name": "szarkans"
   },

@@ -62,6 +62,33 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-threads-") as tmp:
                             input="not a commit", capture_output=True, text=True, check=True)
     assert evidence(f"merge {orphan.stdout.strip()[:8]} into main") is None
 
+    # A thread naming several items is finished when every one of them is. The host is
+    # stubbed here: going to the network would make this check depend on the state of
+    # real issues, which is exactly the thing that keeps moving.
+    import threads as threads_module
+    host = {"1": {"state": "CLOSED", "title": "done", "url": "u/1"},
+            "2": {"state": "MERGED", "title": "merged", "url": "u/2"},
+            "3": {"state": "OPEN", "title": "still open", "url": "u/3"}}
+    real_gh = threads_module._gh
+    threads_module._gh = lambda args: host.get(args[2])
+    try:
+        one = evidence("close #1")
+        assert one and one["reference"] == "#1", one
+        assert one["covers"] == "the referenced item only", one
+
+        both = evidence("close #1 and #2")
+        assert both and both["reference"] == "#1, #2", both
+        assert both["state"] == "CLOSED, MERGED", both
+        assert both["covers"] == "the 2 referenced items only", both
+
+        # The defect this pins: the first reference used to answer for the whole thread,
+        # so a thread holding an open item closed as proven the moment the other landed.
+        assert evidence("close #1 and #3") is None, "an open second reference must withhold evidence"
+        assert evidence("close #3 and #1") is None, "order must not decide the answer"
+        assert evidence("close #3") is None
+    finally:
+        threads_module._gh = real_gh
+
     checked = json.loads(subprocess.run(
         [sys.executable, str(SCRIPT), "--log", str(log), "--check", "nothing to point at here"],
         capture_output=True, text=True, check=True).stdout)

@@ -108,21 +108,31 @@ def evidence(thread: str, repo: str | None = None) -> dict | None:
     Returns None whenever the answer is not a clear yes — no reference, no `gh`, no
     network, still open. Silence is never read as done.
     """
-    match = ISSUE.search(thread)
-    if match:
-        target = match.group("number")
-        args = ["issue", "view", target, "--json", "state,title,url"]
-        if match.group("repo") or repo:
-            args += ["--repo", match.group("repo") or repo]
-        found = _gh(args) or _gh([arg if arg != "issue" else "pr" for arg in args])
-        if found and str(found.get("state", "")).upper() in ("CLOSED", "MERGED"):
-            # Evidence about the thing named, not a verdict on the thread. "Backport the
-            # merged PR #41" mentions a merged PR and is not itself done, so the caller
-            # decides whether the thread asked for exactly what this evidence shows.
-            return {"kind": "issue", "reference": match.group(0), "state": found["state"],
-                    "title": found.get("title", ""), "url": found.get("url", ""),
-                    "covers": "the referenced item only"}
-        return None
+    matches = list(ISSUE.finditer(thread))
+    if matches:
+        # Every reference has to be finished, not just the first one written down. A
+        # thread saying "issue #13 and #14 are open" used to answer with whichever came
+        # first: close #13 and the whole thread reads as proven, while #14 still holds
+        # the work. One unfinished reference withholds the evidence for all of them.
+        seen = []
+        for match in matches:
+            args = ["issue", "view", match.group("number"), "--json", "state,title,url"]
+            if match.group("repo") or repo:
+                args += ["--repo", match.group("repo") or repo]
+            found = _gh(args) or _gh([arg if arg != "issue" else "pr" for arg in args])
+            if not (found and str(found.get("state", "")).upper() in ("CLOSED", "MERGED")):
+                return None
+            seen.append((match.group(0), found))
+        # Evidence about the things named, not a verdict on the thread. "Backport the
+        # merged PR #41" mentions a merged PR and is not itself done, so the caller
+        # decides whether the thread asked for exactly what this evidence shows.
+        return {"kind": "issue",
+                "reference": ", ".join(reference for reference, _ in seen),
+                "state": ", ".join(item["state"] for _, item in seen),
+                "title": " | ".join(item.get("title", "") for _, item in seen),
+                "url": " ".join(item.get("url", "") for _, item in seen),
+                "covers": "the referenced item only" if len(seen) == 1
+                          else f"the {len(seen)} referenced items only"}
     commit = COMMIT.search(thread)
     if commit and shutil.which("git") is not None:
         sha = commit.group("sha")
