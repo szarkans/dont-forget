@@ -154,6 +154,25 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(squeezed["tails"]) + len(squeezed["gotchas"]) < len(payload["tails"]) + len(payload["gotchas"])
     assert b"truncated" not in squeezed_raw, squeezed_raw
 
+    # A project whose notes are old and few must still see its own. Capping the pool
+    # before applying the project filter pushed exactly those notes out, and the digest
+    # then filled with unfiled ones — measured on a live vault, where a project with eight
+    # gotchas of its own showed none of them.
+    con = sqlite3.connect(db)
+    for n in range(60):
+        con.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (100 + n, f"notes/loud {n}.md", f"Atom — loud gotcha {n}", "atom",
+                     "gotcha", "", "loudproject", fresh, "", 0, f"l{n}"))
+    con.execute("INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (200, "notes/quiet.md", "Atom — the quiet project has one gotcha", "atom",
+                 "gotcha", "", "quietproject", oldest, "", 0, "q"))
+    con.commit()
+    con.close()
+    # The pool is a multiple of the requested count, so asking for one gotcha makes the
+    # pool small enough that the sixty louder, fresher notes would fill it completely.
+    quiet, _ = invoke(db, "--project", "quietproject", "--gotchas", "1")
+    assert quiet["gotchas"] == ["the quiet project has one gotcha"], quiet["gotchas"]
+
     # A negative count is nonsense, and a slice quietly read -1 as "all but the last".
     negative, _ = invoke(db, "--project", "", "--tails", "-1", "--gotchas", "-1")
     assert negative["tails"] == [] and negative["gotchas"] == [], negative

@@ -121,24 +121,27 @@ def read_tails(db_path: Path, limit: int, project: str = "") -> list[str]:
     the top of the list answers "what am I in the middle of", which is the question the
     digest exists for. Everything below the cut is still in the vault and still findable.
     """
-    # Only the freshest sessions are read, not every session ever written: dropping the
-    # date window otherwise means loading every chunk of every session before applying a
-    # cap of fifteen, which grows without limit in a vault that keeps being used.
-    rows = _rows(db_path, """SELECT n.path, n.project, c.body
-                FROM chunks c JOIN (SELECT id, path, project, date FROM notes
-                                     WHERE lower(type) = 'session'
-                                     ORDER BY date(date) DESC, path LIMIT ?) n
-                  ON c.note_id = n.id
-                ORDER BY date(n.date) DESC, n.path, c.ord""", (max(limit, 1) * SESSION_POOL,))
+    # Metadata for every session first, bodies only for the ones that survive the filter.
+    # Capping before filtering is what broke this: a project with few sessions had its own
+    # notes fall outside the pool entirely, and the digest filled up with unfiled ones.
+    sessions = _rows(db_path, """SELECT id, path, project FROM notes
+                WHERE lower(type) = 'session' ORDER BY date(date) DESC, path""")
+    wanted = _by_project(sessions, project)[:max(limit, 1) * SESSION_POOL]
+    if not wanted:
+        return []
+    marks = ",".join("?" for _ in wanted)
+    bodies = _rows(db_path, f"""SELECT note_id, body FROM chunks
+                WHERE note_id IN ({marks}) ORDER BY note_id, ord""",
+                   tuple(row["id"] for row in wanted))
 
     # Chunks are pieces of a note, so a code fence can open in one and close in another.
     # Rejoining the note before stripping keeps the fence state whole; scanning chunk by
     # chunk would let the tail of a split code block through as if it were a real task.
-    notes: dict[str, tuple[str, list[str]]] = {}
-    for row in rows:
-        notes.setdefault(row["path"], (row["project"], []))[1].append(row["body"])
-    ordered = _by_project([{"path": path, "project": note_project, "bodies": bodies}
-                           for path, (note_project, bodies) in notes.items()], project)
+    by_note: dict[int, list[str]] = {}
+    for row in bodies:
+        by_note.setdefault(row["note_id"], []).append(row["body"])
+    ordered = [{"path": row["path"], "project": row["project"],
+                "bodies": by_note.get(row["id"], [])} for row in wanted]
 
     # A thread the user has closed is gone from the digest and untouched in its note: the
     # session note is a dated snapshot, and ticking a box in it afterwards edits history.
@@ -170,9 +173,10 @@ def read_gotchas(db_path: Path, limit: int, project: str = "") -> list[str]:
     of being read. Keeping them in one list meant a standing warning sank down a
     freshness-ordered list of chores until it fell off the end.
     """
+    # No pool here: this reads one metadata row per gotcha and never touches a body, and
+    # capping before the project filter is exactly what hid a small project's own gotchas.
     rows = _rows(db_path, """SELECT path, title, project FROM notes
-                WHERE lower(kind) = 'gotcha' ORDER BY date(date) DESC, path LIMIT ?""",
-                 (max(limit, 1) * SESSION_POOL,))
+                WHERE lower(kind) = 'gotcha' ORDER BY date(date) DESC, path""")
     out = []
     for row in _by_project(rows, project)[:max(0, limit)]:
         title = row["title"].split(" — ", 1)[-1].strip() or row["title"]
