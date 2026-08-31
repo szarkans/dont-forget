@@ -14,7 +14,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from common import DEFAULT_DB, DEFAULT_QUERY_LOG, connect_ro
+from common import DEFAULT_DB, DEFAULT_QUERY_LOG, NotConfigured, connect_ro, vault_from_config
 from index import refresh_index, schema_stale
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
@@ -310,6 +310,12 @@ def main() -> None:
         raise SystemExit(f"{index_error} The existing index was built by an older version "
                          "and cannot be searched until the refresh succeeds and rebuilds it.")
     result = search(query, budget, hub_cap, db_path, args.graph_share)
+    # Every fragment path is vault-relative, so without the root the reader cannot open
+    # the note an excerpt was cut out of — and starts guessing where the vault lives.
+    try:
+        result["vault"] = str(args.vault or vault_from_config())
+    except NotConfigured:
+        pass
     if index_error:
         print(f"{index_error} Searching the existing index, which may be stale.", file=sys.stderr)
         result["coverage"]["index_stale"] = True
