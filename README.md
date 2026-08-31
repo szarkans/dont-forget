@@ -9,10 +9,10 @@ highly inspired by [mnemo](https://github.com/jojoprison/mnemo).
 
 <h2 align="center">what's this about?</h2>
 
-A folder of `.md` files for every gotcha / session-handoff / idea / fact you hit while
+a folder of `.md` files for every gotcha / session-handoff / idea / fact you hit while
 working on your project and decided (or your agent decided) to save.
 
-Then you can recall "oh, we did that two years ago!" or "wait no, that messed up our
+then you can recall "oh, we did that two years ago!" or "wait no, that messed up our
 database two months ago". Search runs locally over SQLite full-text search plus a walk
 across the `[[wiki-links]]` between your notes — you may find cross-references from
 other projects you forgot existed.
@@ -42,9 +42,9 @@ then
 
 then
 
-Use Claude Code as usual! After some time you'll have your second-brain-ish.
+use Claude Code as usual! After some time you'll have your second-brain-ish.
 
-Requirements: `python3`. No pip installs, no dependencies — standard library only.
+requirements: `python3`. No pip installs, no dependencies — standard library only.
 
 <h2 align="center">commands</h2>
 
@@ -76,7 +76,6 @@ folder later. Finds your vaults for you instead of asking you to type a path.
 
 <h2 align="center">why your README written like that?</h2>
 
-Because it's written by me, a human. I'm tired of b2b-ai-saas-agentic-loop-skills
-descriptions, they're a pain in the ass to read.
-
-Plain and to the point. For the rest of the details just ask your agent.
+because its written by me, human. *mostly*.  
+no buzzwords, no ai-b2b-saas readmes, just straight to the point.  
+its breathtaking, isnt it?
