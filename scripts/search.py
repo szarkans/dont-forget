@@ -43,6 +43,13 @@ MIN_STEM = 3
 # is caught until 0.6 while the false refusals climb 2, 4, 5, 8. So 0.4 buys the last
 # refusal that is free.
 WEAK_COVERAGE = 0.4
+# A ticket or PR id: "BTS-226", "TE-311", "PR 498", "PR #498", "issue 12". A bare "#12"
+# is not one — filenames cannot hold "#", so it can only ever match digits in a date.
+TICKET = re.compile(r"\b[A-Za-zА-Яа-я]{2,}-\d+\b|\b(?:PR|MR|issue)\s*#?\d+\b", re.I)
+
+
+def _ticket_key(match: str) -> str:
+    return re.sub(r"[^0-9a-zа-я]", "", match.lower())
 
 
 def parse_terms(query: str) -> list[str]:
@@ -246,6 +253,19 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
              "found_by": "text", "_id": row["id"], "_note": row["note_id"], "_bm25": row["rank"]}
             for row in rows]
     text.sort(key=lambda item: (-item["score"], item["_bm25"]))
+    # Half of the user's real questions to memory are "where did we stop on BTS-226",
+    # not "what breaks in X": a ticket id and filler. Coverage by word mass is weak on
+    # those by construction, yet the note titled with that ticket is sitting in the top
+    # three — and the flag was making the reader open with "nothing in the vault" while
+    # looking at it (4 of 14 false abstains on the tune split). An id shared with a
+    # title is a match no share can outweigh. Only ids: a project name in a title is
+    # not enough, it un-flagged two of ten trap questions.
+    # Whole ids on both sides, never substrings: "BTS-22" is not "BTS-226", and "12"
+    # is in every date. "PR #498", "PR 498" and "PR-498" are one id.
+    ids = {_ticket_key(m) for m in TICKET.findall(query)}
+    if weak and ids and any(_ticket_key(m) in ids for item in text[:3]
+                            for m in TICKET.findall(item["path"])):
+        weak = False
 
     # Text fills first, then neighbours take the remainder. Only if neighbours exist
     # and got nothing does the text tail give up the reserved slice — that is the

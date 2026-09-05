@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -52,6 +53,41 @@ def validate_frontmatter(content: str) -> None:
         raise ValueError("frontmatter opened with '---' but never closed")
 
 
+SLOT = re.compile(r"^[\s*_>-]*(Because|Fails-when)[\s*_]*:", re.M)
+
+
+def validate_shape(content: str) -> list[str]:
+    """What the graph and the reader need from a new note, held here rather than in prose.
+
+    Three weeks after these became checklist lines in the skill, atoms carrying
+    `Fails-when` fell from 73% to 41% and one atom in five had no note pointing at it:
+    a line the agent may skip is a line it skips at the end of a long session. A
+    note is refused, not fixed — the wording is the author's. Replace is exempt, so a
+    `died:` mark or a correction never trips over an old note's shape.
+
+    Links and fences are read by the indexer's own functions, so the gate refuses
+    exactly what the index would leave without an edge — its own regex disagreed on
+    `~~~` fences and heading-only links, and passed the graphless note it promised
+    to refuse.
+    """
+    from index import extract_links, parse_frontmatter, strip_fences
+
+    meta, body = parse_frontmatter(content)
+    problems = []
+    if not extract_links(body):
+        problems.append("no [[link]] outside code fences — a note nothing points at and that"
+                        " points at nothing is invisible to the graph")
+    kind = str(meta.get("kind", "")).strip().lower()
+    if kind in ("decision", "gotcha"):
+        # A line that starts with the slot, not the word somewhere in prose: "because
+        # we forgot the Fails-when field" used to satisfy both.
+        present = {m.group(1) for m in SLOT.finditer(strip_fences(body))}
+        for slot in ("Because", "Fails-when"):
+            if slot not in present:
+                problems.append(f"kind: {kind} without a `{slot}:` line")
+    return problems
+
+
 def validate_filename(filename: object) -> str:
     if not isinstance(filename, str) or not filename:
         raise ValueError("filename must be a non-empty string")
@@ -64,7 +100,7 @@ def validate_filename(filename: object) -> str:
 
 
 def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
-                  limit: int = 3) -> list[dict]:
+                  limit: int = 3, neighbours: bool = False) -> list[dict]:
     """Notes the vault already holds that may be this same claim.
 
     This used to be a checklist line telling the agent to run the search and judge the
@@ -82,12 +118,15 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
     # A session note is a dated snapshot, not a claim, so it has no duplicates by
     # construction — and it always reads like every earlier session of the same project.
     # Without this the writer would answer "similar" to every session ever recorded.
-    if str(meta.get("type", "")).strip().lower() == "session":
+    if str(meta.get("type", "")).strip().lower() == "session" and not neighbours:
         return []
 
     query = f"{Path(filename).stem} {body[:400]}"
     try:
-        refresh_index(vault, db_path)
+        # The neighbour pass runs right after the write: refreshing here would index
+        # the new note and let its own chunks eat the budget meant for its neighbours.
+        if not neighbours:
+            refresh_index(vault, db_path)
         # A third of real chunks are larger than 1200 bytes, and apply_budget stops at
         # the first fragment that does not fit — so a small budget here returned nothing
         # and let the duplicate through.
@@ -96,12 +135,15 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
         # Dedup is a courtesy, not a gate: a broken index must not stop a note being
         # written. The write is the thing the user asked for.
         return []
-    if result["coverage"].get("weak_match"):
+    # A duplicate needs a strong match; a neighbour worth a link does not.
+    if result["coverage"].get("weak_match") and not neighbours:
         return []
     seen, out = set(), []
     for fragment in result["fragments"]:
         path = fragment.get("path")
-        if path in seen or path == filename:
+        # A session note is never a duplicate of a claim (it may share the ticket in its
+        # name, nothing more); as a neighbour it is a fine link.
+        if path in seen or path == filename or (fragment.get("type") == "session" and not neighbours):
             continue
         seen.add(path)
         out.append({"path": path, "kind": fragment.get("kind") or "",
@@ -157,6 +199,10 @@ def main() -> None:
         if fcntl is not None:
             vault_fd = os.open(vault, os.O_RDONLY)
             fcntl.flock(vault_fd, fcntl.LOCK_EX)
+        # A note already on disk answers exists-same or conflict as before; the gate
+        # is for what is about to be written, and notes older than it are not.
+        problems = (validate_shape(content)
+                    if action == "create" and not (vault / filename).exists() else [])
         if action == "replace":
             expected_sha = payload.get("expected_sha")
             if not isinstance(expected_sha, str) or len(expected_sha) != 64:
@@ -172,11 +218,18 @@ def main() -> None:
             # skipping the check is the one failure mode this must not have.
             skip = payload.get("duplicates_checked") is True
             if not skip and db_path is None:
-                print("dedup skipped: --vault was given without --db, and the check needs"
-                      " an index that belongs to this vault.", file=sys.stderr)
-            candidates = ([] if skip or db_path is None
+                print("dedup and neighbours skipped: --vault was given without --db, and both"
+                      " need an index that belongs to this vault.", file=sys.stderr)
+            candidates = ([] if skip or db_path is None or problems
                           else similar_notes(vault, db_path, filename, content))
-            status = "similar" if candidates else write_note(vault, filename, content)
+            status = ("rejected" if problems else "similar" if candidates
+                      else write_note(vault, filename, content))
+            # The links a note should carry are the ones it does not know about yet.
+            # mnemo ran a separate `connect` after every write; here the writer hands
+            # back the nearest notes and the skill offers them, so the step cannot be
+            # forgotten — it arrives with the status.
+            neighbours = (similar_notes(vault, db_path, filename, content, limit=5, neighbours=True)
+                          if status == "created" and db_path is not None else [])
         # Every write, whatever the genre: "the RCON password leaked" arrived as an open
         # thread, not as a gotcha. The warning goes in the returned status as well as to
         # stderr, so it can be counted later instead of scrolling past.
@@ -187,6 +240,11 @@ def main() -> None:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
     result = {"status": status}
+    if status == "rejected":
+        result["problems"] = problems
+        print("rejected, not written: " + "; ".join(problems), file=sys.stderr)
+    if status == "created" and neighbours:
+        result["neighbours"] = neighbours
     if status == "similar":
         # Not written. The caller shows these, the user says new note or an update to an
         # existing one, and a repeat with duplicates_checked writes it.

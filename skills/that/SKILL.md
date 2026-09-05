@@ -42,8 +42,9 @@ model: inherit
 
 - [ ] Express a decision as: "in context X, facing Y, chose Z and rejected W",
   followed by `Because:` and `Fails-when:`.
-- [ ] Express a gotcha as `GIVEN / WHEN / THEN`, followed by `Because:` and a dated
-  precedent.
+- [ ] Express a gotcha as `GIVEN / WHEN / THEN`, followed by `Because:`, `Fails-when:`
+  (the provoking input and the wrong outcome, so the note is found by its symptom) and
+  a dated precedent.
 - [ ] Give a principle, pain, or stance the slots `Job`, `Pain`, `Done-well`, and
   `Anti-goal`.
 - [ ] Give a fact or insight a claim-title, a BLUF, and supporting evidence.
@@ -71,6 +72,15 @@ model: inherit
 
 ## Preserve the knowledge graph
 
+- [ ] Expect the writer to answer `rejected` when the note has no `[[link]]` outside a
+  code block, or a decision or gotcha lacks `Because:` or `Fails-when:`. That is the
+  shape the graph and the reader need, and the writer holds it because a checklist line
+  did not: three weeks after it became prose, atoms carrying `Fails-when` fell from 73%
+  to 41%. Fix the note and repeat the call; there is no flag around it.
+- [ ] Expect `neighbours` beside a `created` status: the nearest notes the vault already
+  holds. Offer them to the user as links with one line each on why they touch this
+  claim — a bare link is noise — and, on their word, add the accepted ones under
+  `## Links` with `action: "replace"` and `expected_sha`. Never add them unasked.
 - [ ] Expect the writer to answer `similar` instead of writing, with the notes it thinks
   say this already. That check is no longer yours to remember to run — but the decision
   is yours to put to the user: update one of those notes, or write a new one and repeat

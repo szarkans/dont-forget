@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.11.0 — 2026-09-06
+
+### Changed
+- The writer now refuses a note the graph cannot hold: no `[[link]]` outside a code
+  block, or a decision or gotcha without `Because:` and `Fails-when:`, comes back
+  `rejected` and nothing is written. These were checklist lines in the skill, and three
+  weeks of measurement said what a checklist line is worth at the end of a long session:
+  atoms carrying `Fails-when` fell from 73% to 41%, links per atom from 3.2 to 2.2, and
+  one new atom in five had no note pointing at it. Replace is exempt, so marking a note
+  `died:` or correcting an old one never trips over its shape. Fix the note and repeat
+  the call — there is no flag around the gate.
+  - Why: what must hold is held by code; what needs judgement stays prose. The wording is
+    still yours — the writer says what is missing, never fills it in.
+
+### Added
+- A `created` status now carries `neighbours`: the nearest notes the vault already holds.
+  The skill offers them as links with a reason each and adds only the ones you accept.
+  - Why: the links a new note should carry are the ones its author does not know about
+    yet, and a separate "find connections" step is the step that gets skipped.
+
+### Fixed
+- Recall stopped opening with "nothing in the vault" while looking at the answer. Half of
+  real questions to memory are "where did we stop on BTS-226" — a ticket id and filler —
+  and coverage by word mass is weak on those by construction. On the benchmark's tune
+  split the flag fired on 14 of 29 answerable questions, 4 of them with the answer in the
+  top three. A ticket or PR id shared between the question and a top-three title now
+  un-flags the result; a project name in a title does not, because that un-flagged trap
+  questions. Tune split: 14 false abstains → 12, traps unchanged.
+
 ## 0.10.4 — 2026-08-31
 
 ### Fixed

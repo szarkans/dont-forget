@@ -302,6 +302,8 @@ with tempfile.TemporaryDirectory() as tmp:
     (vault / "long.md").write_text("# Long\n\nalphaword and betaword together. "
                                    + "surrounding sentences that make this chunk long. " * 12)
     (vault / "gammanote.md").write_text("# Gammanote\n\ngammaword stands alone\n")
+    (vault / "Session — 2026-07-21 BTS-226 folder.md").write_text(
+        "# Session\n\nthe ticket got its folder and the run was green\n")
 
     def run(query: str, *extra: str) -> dict:
         done = subprocess.run(
@@ -370,6 +372,25 @@ with tempfile.TemporaryDirectory() as tmp:
     found = run("gammaword")
     assert found["coverage"]["returned"] > 0, found["coverage"]
     assert found["coverage"]["weak_match"] is False, found["coverage"]
+
+    # "Where did we stop on BTS-226" is a ticket id and filler, so its mass share is
+    # weak by construction — yet the note titled with that ticket is the answer, and
+    # the flag was making the reader open with "nothing in the vault" while looking at
+    # it. An id shared with a top-3 title un-flags; a project word in a title does not,
+    # because that un-flagged trap questions on the benchmark.
+    ticket = run("remind me is BTS-226 finished can we move on")
+    assert ticket["coverage"]["best_mass_share"] < 0.4, ticket["coverage"]
+    assert ticket["fragments"][0]["path"].startswith("Session — 2026-07-21 BTS-226"), ticket["fragments"]
+    assert ticket["coverage"]["weak_match"] is False, ticket["coverage"]
+    ticketless = run("remind me is the folder finished can we move on")
+    assert ticketless["coverage"]["weak_match"] is True, ticketless["coverage"]
+    # Whole ids only: BTS-22 is not BTS-226, and a bare "#21" must not find "2026-07-21".
+    prefix = run("remind me is BTS-22 finished can we move on")
+    assert prefix["coverage"]["weak_match"] is True, prefix["coverage"]
+    bare = run("remind me is #21 finished can we move on")
+    assert bare["coverage"]["weak_match"] is True, bare["coverage"]
+    prose = run("remind me is 226 finished can we move on")
+    assert prose["coverage"]["weak_match"] is True, prose["coverage"]
 
 
 # A word typed in one grammatical form does not prefix-match the same word written in

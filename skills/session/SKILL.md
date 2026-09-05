@@ -106,6 +106,9 @@ Threads live only in this note's pending section; the digest reads them from the
 - [ ] Write only through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"` with
   `filename` and `content`. If the name exists, offer `action: "replace"` with
   `expected_sha`; on `conflict`, stop and tell the user.
+- [ ] A note with no `[[link]]` comes back `rejected` — the writer holds the graph's
+  shape now. `neighbours` beside `created` are the nearest notes; offer them as links,
+  add only the ones the user accepts.
 - [ ] Report the note name, the thread count, what entered the index, what stayed unsaved.
 
 Keep it factual and compact: commit ids, PR numbers, branches, failed approaches, and the
