@@ -214,3 +214,12 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert json.loads(quiet.stdout) == {"status": "created"}, quiet.stdout
 
 print("ok")
+
+# A session note lands in sessions/ whatever its project says.
+with tempfile.TemporaryDirectory() as tmp:
+    vault = Path(tmp)
+    proc = invoke(vault, "Session — 2026-01-01 x.md",
+                  "---\ntype: session\nproject: acme\n---\n# S\n\n[[MOC — acme]]\n")
+    assert json.loads(proc.stdout)["status"] == "created", proc.stdout
+    assert (vault / "sessions" / "Session — 2026-01-01 x.md").exists(), list(vault.rglob("*.md"))
+print("session folder: ok")

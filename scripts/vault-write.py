@@ -163,7 +163,10 @@ def locate(vault: Path, filename: str, content: str = "") -> Path:
     for hit in vault.rglob(filename):
         if hit.is_file():
             return hit
-    match = re.search(r"^project:\s*(.+)$", content.split("\n---", 2)[0] if content.startswith("---") else "", re.M)
+    front = content.split("\n---", 2)[0] if content.startswith("---") else ""
+    if re.search(r"^type:\s*session\s*$", front, re.M):
+        return vault / "sessions" / filename  # sessions are one folder, not one per project
+    match = re.search(r"^project:\s*(.+)$", front, re.M)
     folder = re.sub(r"\s+", "-", match.group(1).strip().strip("\"'").lower()) if match else "_unsorted"
     return vault / folder / filename
 
