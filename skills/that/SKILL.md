@@ -16,6 +16,11 @@ model: inherit
   default — is already in every model and every manual, and in the vault it is the
   worst kind of noise: written in common words, it matches many queries and answers
   none, while the byte budget drops real fragments to make room for it.
+  The exception is the user's own position: a rule, principle, or lesson they state
+  in their own words is theirs even when the world has said something like it before
+  ("progression should grow sideways, not just further"). Record it, and keep their
+  sentence verbatim as a `> ` quote under the title with the date it was said; your
+  rewording, if any, goes below the quote, never in place of it.
 - [ ] Redact passwords, tokens, keys, and other secrets as `<REDACTED>` before any
   content is written or shown in a write payload. The writer scans for them too and
   returns a `warning` beside the status — it warns, it does not block, so a warning
@@ -33,11 +38,19 @@ model: inherit
 
 ## Shape the note around the claim
 
-- [ ] Write `type: atom`. There is no role to pick here: `session` notes come from the
-  `session` skill, MOC pages are born from demand rather than written by hand,
-  generalisations across several atoms are proposed later by the vault audit, and where
-  the knowledge came from is the `source:` field rather than a type. The filename is
-  `Atom — <complete claim>.md`; keep `#` and `/` out of its stem. A `.` is fine — a
+- [ ] The vault's rules live in its own `README.md` at the vault root, in Russian, and
+  outrank this file wherever they differ: the vault is the data, this plugin is the
+  engine. Read it once per session before the first write.
+- [ ] Write `type: atom` for a card. `session` notes come from the `session` skill, MOC
+  pages are born from demand rather than written by hand, and where the knowledge came
+  from is the `source:` field rather than a type. The filename is
+  `<Kind> — <complete claim>.md`, where Kind is the capitalised `kind:` of the note —
+  `Gotcha`, `Decision`, `Principle`, `Stance`, `Pain` — and `Fact` for a fact or insight
+  that carries no `kind:` (renamed from `Atom — ` on 13.09.2026); keep `#` and `/` out
+  of its stem. The writer files the note by its `project:` into that project's folder
+  (`gamedev/`, `gym/`, `bts/`) and into `_unsorted/` when there is none: send only the
+  filename, never a path. `_inbox/` is different: it is the user's own drop folder, never
+  written by an agent, and sorted only when the user asks. A `.` is fine — a
   claim like `bash 3.2` or `search.py` keeps it.
 
 - [ ] Express a decision as: "in context X, facing Y, chose Z and rejected W",
@@ -68,7 +81,50 @@ model: inherit
 - [ ] Every vault note needs YAML frontmatter. Include `type: atom`, creation `date`,
   `tags` with `atom` as the first tag, `source` identifying where the knowledge came
   from, and `volatility`. Add `aliases` only when useful and `project` when the claim
-  is project-bound.
+  is project-bound. A project is any domain the user works in, not only a repository:
+  a game they design, their training, their health, their own habits all count, and
+  each gets a `project:` of its own (`gamedev`, `gym`, `self`) so recall on "load" or
+  "recovery" does not mix the body with the backend. Nothing about the domain makes a
+  claim ineligible; the only test is whether it changes a future session's behaviour.
+- [ ] The vault is a git repository. A note about the user's health, mood, money, or
+  other people is still theirs to keep, but say once, before writing it, that it will
+  be committed with the rest, and ask whether it belongs in the vault's untracked
+  folder instead. Do not decide that for them, and do not ask again for the same domain
+  in the same session.
+
+## Say where it lands before it lands
+
+- [ ] Before any write, search the vault for the claim's key words and its synonyms
+  (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<words>"`), read what comes back,
+  and tell the user in one or two lines where the new claim lands — one of four:
+  **new** (nothing close), **continues [[X]]** (same cause, another case: a merge
+  candidate), **contradicts [[Y]] (date)** (say which is newer and that the older may
+  be superseded; never silently drop either), or **already there** (nothing to write).
+  Only then write. This line is the product, not a courtesy: it is the one moment
+  the user sees the vault working, and a repeated cause found here is a root the
+  pile alone will never show. Skipping it because the claim "looks new" is how the
+  vault grew 570 typed notes and fewer than ten generalisations.
+- [ ] Count what the search returned. When the claim **continues** a third card on the
+  same cause and no `Godnote —` page covers it yet, say so and offer to build one; on
+  the user's word, write it. This is the only trigger the synthesis layer has besides a
+  direct request; there is no scheduler. Measured before it existed: 570 cards, fewer
+  than ten generalisations.
+- [ ] A contradiction is not resolved by the write. Name it in the new note's
+  `## Links` with the date of the older claim, and offer — never do unasked — to
+  add a `Disputed-by:` line to the older note so a reader of either sees both.
+
+## Godnote — a page built from cards
+
+- [ ] A godnote is one conclusion drawn from several cards: the root under a pile of
+  symptoms, "what we know about X". Filename `Godnote — <conclusion>.md`, frontmatter
+  `type: godnote`, `project:`, `date`, `tags: [godnote]`; the body is a BLUF, then the
+  argument, then `## Cards` listing every card it was built from as a `[[link]]` with one
+  line each. A godnote with no cards behind it is a claim, not a page.
+- [ ] Cards outrank godnotes. A card was written by the script, at the time, in the
+  user's words; a godnote is a rewrite. When they disagree, the card is right and the
+  godnote is stale: rebuild it wholesale from its cards, do not patch a paragraph.
+- [ ] `legacy: true` marks the pages written before this rule, with no cards behind
+  them. They are not evidence. Rebuild one when the work touches it, never in bulk.
 
 ## Preserve the knowledge graph
 

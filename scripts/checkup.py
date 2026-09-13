@@ -101,7 +101,7 @@ def report(db_path, stale_days=STALE_DAYS, feedback_path=DEFAULT_FEEDBACK):
     today = date.today()
     for row in con.execute("""
         SELECT title, path, date, reviewed FROM notes
-        WHERE type IN ('atom','molecule','source') ORDER BY title, path
+        WHERE type IN ('atom','molecule','godnote','source') ORDER BY title, path
     """):
         dates = [d for d in (parsed_date(row["date"]), parsed_date(row["reviewed"])) if d]
         if dates:

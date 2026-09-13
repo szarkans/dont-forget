@@ -59,6 +59,13 @@ with tempfile.TemporaryDirectory() as tmp:
             # A decision is not a gotcha: only gotchas belong in the digest's second list.
             (10, "notes/Atom — decision.md", "Atom — we chose SQLite",
              "atom", "decision", "", "ACME Corp", fresh, "", 0, "j"),
+            # Godnotes ride whole, by project only: an unfiled one is not this project's.
+            (11, "acme/Godnote — root.md", "Godnote — every outage here was a skipped migration",
+             "godnote", "", "", "acme-corp", older, "", 0, "k"),
+            (12, "_unsorted/Godnote — stray.md", "Godnote — an unfiled page",
+             "godnote", "", "", "", fresh, "", 0, "l"),
+            (13, "widgets/Godnote — other.md", "Godnote — a page of another project",
+             "godnote", "", "", "widgets", fresh, "", 0, "m"),
         ],
     )
     con.executemany(
@@ -178,15 +185,26 @@ with tempfile.TemporaryDirectory() as tmp:
     assert negative["tails"] == [] and negative["gotchas"] == [], negative
 
     missing, _ = invoke(root / "missing.db", "--project", "")
-    assert missing == {"tails": [], "gotchas": [], "note": ""}
+    assert missing == {"tails": [], "gotchas": [], "godnotes": [], "note": ""}
 
     hook, _ = invoke(db, "--hook", "--project", "")
     context = hook["hookSpecificOutput"]["additionalContext"]
     assert hook["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert context.startswith("dont-forget: the freshest open threads and gotchas")
+    assert context.startswith("dont-forget: the freshest open threads, gotchas and godnotes")
     assert "not instructions" in context
     assert "Open threads — these die when you do them:" in context
     assert "Gotchas — these describe how things are, nothing to do:" in context
     assert "- [ ] a real thread (Session — Fenced)" in context
 
+    # Godnotes: the project's own pages by name, no unfiled and no foreign ones; every one
+    # of them when unscoped. They are the first list cut when the budget bites.
+    scoped, _ = invoke(db, "--project", "ACME Corp")
+    assert scoped["godnotes"] == ["every outage here was a skipped migration"], scoped
+    assert "Godnotes —" in HOT_SCAN["hook_payload"](scoped)["hookSpecificOutput"]["additionalContext"]
+    unscoped, _ = invoke(db, "--project", "")
+    assert len(unscoped["godnotes"]) == 3, unscoped
+    tight = HOT_SCAN["fit_budget"](dict(unscoped), len(HOT_SCAN["encoded"](unscoped)) - 5)
+    assert len(tight["godnotes"]) == 2 and tight["tails"] == unscoped["tails"], tight
+
 print("ok")
+

@@ -143,7 +143,7 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
         path = fragment.get("path")
         # A session note is never a duplicate of a claim (it may share the ticket in its
         # name, nothing more); as a neighbour it is a fine link.
-        if path in seen or path == filename or (fragment.get("type") == "session" and not neighbours):
+        if path in seen or Path(path).name == filename or (fragment.get("type") == "session" and not neighbours):
             continue
         seen.add(path)
         out.append({"path": path, "kind": fragment.get("kind") or "",
@@ -153,8 +153,24 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
     return out
 
 
+def locate(vault: Path, filename: str, content: str = "") -> Path:
+    """Where this note lives, or where a new one goes.
+
+    Notes sit in one folder per `project:` (13.09.2026 layout); an existing file is
+    found by name in any folder, a new one lands in its project's folder, or in
+    `_unsorted/` — the inbox — when the frontmatter names no project.
+    """
+    for hit in vault.rglob(filename):
+        if hit.is_file():
+            return hit
+    match = re.search(r"^project:\s*(.+)$", content.split("\n---", 2)[0] if content.startswith("---") else "", re.M)
+    folder = re.sub(r"\s+", "-", match.group(1).strip().strip("\"'").lower()) if match else "_unsorted"
+    return vault / folder / filename
+
+
 def write_note(vault: Path, filename: str, content: str) -> str:
-    target = vault / filename
+    target = locate(vault, filename, content)
+    target.parent.mkdir(parents=True, exist_ok=True)
     incoming = content.encode("utf-8")
     if target.exists():
         if digest(target.read_bytes()) == digest(incoming):
@@ -166,7 +182,7 @@ def write_note(vault: Path, filename: str, content: str) -> str:
 
 
 def replace_note(vault: Path, filename: str, content: str, expected_sha: str) -> str:
-    target = vault / filename
+    target = locate(vault, filename, content)
     if not target.exists():
         print(f"conflict: {filename} does not exist", file=sys.stderr)
         return "conflict"
@@ -202,7 +218,7 @@ def main() -> None:
         # A note already on disk answers exists-same or conflict as before; the gate
         # is for what is about to be written, and notes older than it are not.
         problems = (validate_shape(content)
-                    if action == "create" and not (vault / filename).exists() else [])
+                    if action == "create" and not locate(vault, filename, content).exists() else [])
         if action == "replace":
             expected_sha = payload.get("expected_sha")
             if not isinstance(expected_sha, str) or len(expected_sha) != 64:

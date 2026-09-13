@@ -12,6 +12,12 @@ from pathlib import Path
 SCRIPT = Path(__file__).with_name("vault-write.py")
 
 
+
+def at(vault, name):
+    """Notes now live one folder per project; a written note is found by name anywhere."""
+    hits = [h for h in vault.rglob(name) if h.is_file()]
+    return hits[0] if hits else vault / name
+
 def invoke(vault: Path, filename: str, content: str, **extra: str) -> subprocess.CompletedProcess[str]:
     payload = json.dumps({"filename": filename, "content": content, **extra})
     return subprocess.run(
@@ -31,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     created = invoke(vault, filename, original)
     assert created.returncode == 0, created.stderr
     assert json.loads(created.stdout) == {"status": "created"}
-    assert (vault / filename).read_text(encoding="utf-8") == original
+    assert at(vault, filename).read_text(encoding="utf-8") == original
 
     same = invoke(vault, filename, original)
     assert same.returncode == 0, same.stderr
@@ -41,24 +47,24 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert conflict.returncode == 0
     assert json.loads(conflict.stdout) == {"status": "conflict"}
     assert "conflict" in conflict.stderr
-    assert (vault / filename).read_text(encoding="utf-8") == original
+    assert at(vault, filename).read_text(encoding="utf-8") == original
 
     replacement = "---\ntype: atom\n---\nA better claim. [[hub]]\n"
     original_sha = hashlib.sha256(original.encode()).hexdigest()
     replaced = invoke(vault, filename, replacement, action="replace", expected_sha=original_sha)
     assert replaced.returncode == 0, replaced.stderr
     assert json.loads(replaced.stdout) == {"status": "replaced"}
-    assert (vault / filename).read_text(encoding="utf-8") == replacement
+    assert at(vault, filename).read_text(encoding="utf-8") == replacement
 
     stale = invoke(vault, filename, "must not land", action="replace", expected_sha=original_sha)
     assert stale.returncode == 0
     assert json.loads(stale.stdout) == {"status": "conflict"}
     assert "conflict" in stale.stderr
-    assert (vault / filename).read_text(encoding="utf-8") == replacement
+    assert at(vault, filename).read_text(encoding="utf-8") == replacement
 
     invalid_sha = invoke(vault, filename, "must not land", action="replace", expected_sha="nope")
     assert invalid_sha.returncode != 0
-    assert (vault / filename).read_text(encoding="utf-8") == replacement
+    assert at(vault, filename).read_text(encoding="utf-8") == replacement
 
     before = set(vault.iterdir())
     refused = invoke(vault, "Atom — bad#name.md", "must not land [[hub]]")
@@ -67,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
 
     dotted = invoke(vault, "Atom — v1.2 broke.md", "dotted name content [[hub]]")
     assert dotted.returncode == 0, dotted.stderr
-    assert (vault / "Atom — v1.2 broke.md").read_text(encoding="utf-8") == "dotted name content [[hub]]"
+    assert at(vault, "Atom — v1.2 broke.md").read_text(encoding="utf-8") == "dotted name content [[hub]]"
 
     before = set(vault.iterdir())
     unclosed = invoke(vault, "Atom — unclosed.md", "---\ntype: atom\nbody with no closing fence\n")
@@ -86,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert body["status"] == "created", body
     assert "possible secret" in body["warning"], body
     assert "possible secret" in leaked.stderr
-    assert (vault / "Atom — leaked.md").exists()
+    assert at(vault, "Atom — leaked.md").exists()
 
     # Prose *about* a leak is not a leak. This is the shape the vault actually holds, and
     # a scanner that fires on it teaches the reader to ignore every warning it prints.
@@ -111,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     assert set(vault.iterdir()) == before
     shaped = invoke(vault, "Atom — shaped.md", "---\ntype: atom\nkind: gotcha\n---\nGIVEN x WHEN y THEN z\n**Because**: w\n**Fails-when:** v\n[[hub]]\n")
     assert json.loads(shaped.stdout)["status"] == "created", shaped.stdout
-    sha = hashlib.sha256((vault / "Atom — shaped.md").read_bytes()).hexdigest()
+    sha = hashlib.sha256(at(vault, "Atom — shaped.md").read_bytes()).hexdigest()
     # A linkless note already on disk still answers exists-same: the gate is for what is
     # about to be written, and an idempotent replay writes nothing.
     (vault / "Atom — legacy.md").write_text("---\ntype: atom\n---\nold and linkless\n", encoding="utf-8")
@@ -144,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     flagged = json.loads(duplicate.stdout)
     assert flagged["status"] == "similar", flagged
     assert flagged["candidates"][0]["path"] == "Atom — deploy.md", flagged
-    assert not (vault / "Atom — deploy again.md").exists(), "a candidate is not a refusal to ever write"
+    assert not at(vault, "Atom — deploy again.md").exists(), "a candidate is not a refusal to ever write"
 
     # ...and the same call with the judgement made writes it.
     confirmed = write("Atom — deploy again.md",
@@ -152,7 +158,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
                       "\nA deploy without migrations took prod down on catcraft. [[catcraft]]\n",
                       duplicates_checked=True)
     assert json.loads(confirmed.stdout)["status"] == "created", confirmed.stdout
-    assert (vault / "Atom — deploy again.md").exists()
+    assert at(vault, "Atom — deploy again.md").exists()
     # A created note comes back with its nearest notes, so the links it should carry
     # arrive with the status instead of depending on a separate step.
     assert [n["path"] for n in json.loads(confirmed.stdout)["neighbours"]] == ["Atom — deploy.md"], confirmed.stdout

@@ -12,6 +12,12 @@ within a byte budget, so do not duplicate that logic manually.
 
 ## Search
 
+The session digest already lists this project's `Godnote —` pages by name. When the
+question is the topic of one of them, open that page first: it is the conclusion drawn
+from the cards, and its `## Cards` list is the recall. A page marked `legacy: true` has
+no cards behind it — treat it as a hint, not an answer. Search the cards for anything
+else, and for the detail behind a godnote's claim.
+
 Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
 call, never split the question into several searches: that distorts ranking and coverage.
 
