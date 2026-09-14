@@ -56,6 +56,9 @@ with tempfile.TemporaryDirectory() as tmp:
              "atom", "gotcha", "", "", older, "", 0, "h"),
             (9, "notes/Atom — foreign.md", "Atom — a gotcha of another project",
              "atom", "gotcha", "", "widgets", fresh, "", 0, "i"),
+            # A lead is an untried claim from someone else: never a standing warning.
+            (90, "cooking/Lead — thyme.md", "Lead — strip thyme from the stems",
+             "lead", "gotcha", "", "ACME Corp", fresh, "", 0, "l"),
             # A decision is not a gotcha: only gotchas belong in the digest's second list.
             (10, "notes/Atom — decision.md", "Atom — we chose SQLite",
              "atom", "decision", "", "ACME Corp", fresh, "", 0, "j"),
@@ -108,6 +111,7 @@ with tempfile.TemporaryDirectory() as tmp:
         "arrays break in bash 3.2",
     ], payload
     assert "we chose SQLite" not in " ".join(payload["gotchas"]), payload
+    assert "thyme" not in " ".join(payload["gotchas"]), payload
 
     # Both counts are caps, and both are configurable.
     capped, _ = invoke(db, "--project", "", "--tails", "2", "--gotchas", "1")

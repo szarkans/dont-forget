@@ -94,6 +94,11 @@ that day, not how things stand now. Attribute it that way ("as of the 26th the p
 X"), and when a session note and a later note disagree, the later note wins. A decision
 reversed the next morning still sits in yesterday's diary unchanged.
 
+A `type: lead` fragment is someone else's claim the user saved to look at later and has
+not tried — a video, an article, a tip. Attribute it to its `source` ("a TikTok by @x
+says…") and never state it as a fact, a decision or the user's experience. A synthesis
+that rests on leads says how many of its sources are leads.
+
 A correction usually arrives as a **later note linking back to the one it corrects**, so
 a fragment reached `found_by: link` whose note is newer than the note it points at may be
 a correction, not just a neighbour. When a returned note has such an incoming neighbour,

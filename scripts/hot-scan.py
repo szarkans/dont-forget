@@ -168,8 +168,10 @@ def read_gotchas(db_path: Path, limit: int, project: str = "") -> list[str]:
     """
     # No pool here: this reads one metadata row per gotcha and never touches a body, and
     # capping before the project filter is exactly what hid a small project's own gotchas.
+    # A `lead` is someone else's claim not yet tried: never a standing warning at start.
     rows = _rows(db_path, """SELECT path, title, project FROM notes
-                WHERE lower(kind) = 'gotcha' ORDER BY date(date) DESC, path""")
+                WHERE lower(kind) = 'gotcha' AND lower(coalesce(type, '')) != 'lead'
+                ORDER BY date(date) DESC, path""")
     out = []
     for row in _by_project(rows, project)[:max(0, limit)]:
         title = row["title"].split(" — ", 1)[-1].strip() or row["title"]
