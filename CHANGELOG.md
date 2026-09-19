@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.12.0 — 2026-09-19
+
+### Added
+- Godnotes: a page that draws one conclusion from several cards and lists them under
+  `## Cards`. The session digest now names every godnote of the current project, recall
+  opens a matching one before searching, and the writer offers to build one when a new
+  card repeats a cause already on file.
+  - Why: 570 cards had produced fewer than ten generalisations; word search cannot map
+    synonyms, but the model can once the list is in front of it.
+- Lead notes (`type: lead`): someone else's claim saved to try later — a video, an
+  article, a tip. They stay out of the digest's gotchas, and recall cites them by source
+  instead of stating them as fact.
+  - Why: a saved tip read back as "we know this" is how untried advice becomes a rule.
+- Before writing a card, the agent says where it lands: new, continues [[X]],
+  contradicts [[Y]], or already there.
+  - Why: it is the one moment the user sees the vault working, and a repeated cause
+    spotted here is a root the pile alone never shows.
+
+### Changed
+- The writer files a note into its `project:` folder, session notes into `sessions/`,
+  and a note with no project into `_unsorted/`. Send a filename, never a path; an
+  existing note is found in whatever folder it lives in.
+  - Why: the vault moved to one folder per project on 13.09.2026, and a new note has
+    to land where a person reading that project will look.
+- Card filenames start with their kind — `Gotcha —`, `Decision —`, `Principle —`,
+  `Stance —`, `Pain —`, `Fact —` — instead of `Atom —`, and the vault's own `README.md`
+  outranks the skill wherever they differ.
+  - Why: the kind is what a reader scans for first, and the vault's rules belong to the
+    vault, not to the engine.
+- A rule or lesson the user states in their own words is kept as a verbatim quote with
+  its date; any rewording goes below it. Digest budget 8 KB → 12 KB to fit godnotes.
+
+### Fixed
+- The writer accepted names Windows cannot carry. A `:` or `*` made the write fail on
+  Windows with a bare `Invalid argument`, broke `git clone` of the whole vault, and on
+  WSL turned into a look-alike character that `[[links]]` no longer matched; a trailing
+  dot or space was stripped silently. The writer now refuses these names and returns
+  the portable one to use in the title and every link. Existing notes are not renamed —
+  if your vault is read on Windows, look for `:` in file names and rename them together
+  with their links.
+- The pre-release behaviour check failed whenever the model answered in another
+  language: the injection case looked for the English word `midnight`. The fixture fact
+  is now `00:17`, which reads the same in any language.
+
 ## 0.11.0 — 2026-09-06
 
 ### Changed
