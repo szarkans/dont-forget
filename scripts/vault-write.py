@@ -88,6 +88,25 @@ def validate_shape(content: str) -> list[str]:
     return problems
 
 
+# Windows refuses these outright, silently strips a trailing dot or space, and still
+# treats the old DOS device names as devices. A vault that a Windows box cannot check
+# out or open is a vault the user reads on one machine only, so the writer is the one
+# place that keeps every name portable.
+UNPORTABLE = set('<>:"|?*') | {chr(c) for c in range(32)}
+DOS_DEVICES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{name}{digit}" for name in ("COM", "LPT") for digit in "123456789¹²³"
+}
+
+
+def portable_stem(stem: str) -> str:
+    """The name a rejected one should have become, so the caller can link to it."""
+    fixed = "".join(" " if char in UNPORTABLE else char for char in stem)
+    fixed = " ".join(fixed.split()).rstrip(" .")
+    if fixed.split(".")[0].upper() in DOS_DEVICES:
+        fixed = f"{fixed} note"
+    return fixed
+
+
 def validate_filename(filename: object) -> str:
     if not isinstance(filename, str) or not filename:
         raise ValueError("filename must be a non-empty string")
@@ -96,6 +115,16 @@ def validate_filename(filename: object) -> str:
         raise ValueError("filename must not contain a path")
     if path.suffix != ".md" or not path.stem or "#" in path.stem:
         raise ValueError("filename must be <non-empty stem>.md without '#'")
+    stem = path.stem
+    fixed = portable_stem(stem)
+    if fixed != stem:
+        if not fixed:
+            raise ValueError("filename must hold characters a file name can carry")
+        raise ValueError(
+            f"filename must be portable: '{stem}.md' cannot exist on Windows. "
+            f"Write it as '{fixed}.md' — and use that exact name in every [[link]] "
+            "and in the title line, so the note and its links stay one thing."
+        )
     return filename
 
 

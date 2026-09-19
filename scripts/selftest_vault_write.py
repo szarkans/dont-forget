@@ -223,3 +223,20 @@ with tempfile.TemporaryDirectory() as tmp:
     assert json.loads(proc.stdout)["status"] == "created", proc.stdout
     assert (vault / "sessions" / "Session — 2026-01-01 x.md").exists(), list(vault.rglob("*.md"))
 print("session folder: ok")
+
+# A name Windows cannot carry is refused, and the refusal names the portable one:
+# the caller has to write the same name into its [[links]], so guessing is not enough.
+with tempfile.TemporaryDirectory() as tmp:
+    vault = Path(tmp)
+    body = "---\ntype: atom\n---\n# x\n\n[[hub]]\n"
+    for bad, fixed in [("Gotcha — счётчик: в тени.md", "Gotcha — счётчик в тени.md"),
+                       ("Session — deployed-* теги.md", "Session — deployed- теги.md"),
+                       ("Atom — trailing dot..md", "Atom — trailing dot.md"),
+                       ("NUL.md", "NUL note.md")]:
+        refused = invoke(vault, bad, body)
+        assert refused.returncode != 0, bad
+        assert fixed in refused.stderr, (bad, refused.stderr)
+    assert not list(vault.rglob("*.md")), list(vault.rglob("*.md"))
+    accepted = invoke(vault, "Gotcha — счётчик в тени.md", body)
+    assert json.loads(accepted.stdout)["status"] == "created", accepted.stdout
+print("portable names: ok")

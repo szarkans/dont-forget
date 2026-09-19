@@ -52,6 +52,14 @@ model: inherit
   filename, never a path. `_inbox/` is different: it is the user's own drop folder, never
   written by an agent, and sorted only when the user asks. A `.` is fine — a
   claim like `bash 3.2` or `search.py` keeps it.
+- [ ] A claim-title is prose, and prose reaches for punctuation a file name cannot
+  carry. Say the claim without `: * ? " < > |` — an em dash or a comma carries the
+  same turn, `Gotcha — Счётчик завышается Beat-батчем: в тени` becomes
+  `Gotcha — Счётчик завышается Beat-батчем, в тени`. The writer refuses the rest and
+  names the portable form; take that name verbatim, into the title line and into every
+  `[[link]]` to the note, so the note and its links stay one thing. This is not
+  pedantry about Windows: the user reads the vault in an app on the other side of the
+  machine, and a note it cannot open is a note that was never written.
 
 - [ ] Express a decision as: "in context X, facing Y, chose Z and rejected W",
   followed by `Because:` and `Fails-when:`.
