@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.1 — 2026-09-19
+
+### Fixed
+- The session skill's example of a useless thread no longer calls `e2e not verified this
+  session` one repeated line: the 56 of 629 threads were many wordings of it, and only four
+  matched word for word.
+- The secret scanner's docstring no longer says one transcript surfaced three leaks: the
+  transcript surfaced one, and the other two were already open threads in the vault.
+
 ## 0.12.0 — 2026-09-19
 
 ### Added

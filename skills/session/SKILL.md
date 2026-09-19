@@ -49,8 +49,9 @@ merges it — a thread. "The RCON password went out in public chat" describes ho
 is and no action erases it — knowledge, and it goes through `that`. Threads fall out of
 the digest by freshness, so a fact parked among them is a fact thrown away.
 
-Every thread must name what is unfinished and who finishes it. The most repeated line in
-this vault was `e2e not verified this session` — 56 of 629 threads — and it named neither,
+Every thread must name what is unfinished and who finishes it. The most repeated kind of
+thread in this vault was some wording of `e2e not verified this session` — 56 of 629
+threads — and it named neither,
 so no later session could act on it. Write "the release checklist in PR #41 has not been
 run against prod — user runs it" instead.
 

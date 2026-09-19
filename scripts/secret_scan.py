@@ -3,9 +3,10 @@
 
 Why this is code and not a line in a skill: the writing skill has always said "do not
 save secrets", and the writer would still store a password without blinking. It matters
-now because session transcripts are about to be read and proposed for saving, and a
-sub-agent reading one real transcript surfaced "the password leaked in plain text", "the
-RCON password leaked into an open chat" and "the forwarding secret hit the log twice".
+now because session transcripts are about to be read and proposed for saving: a
+sub-agent reading one real transcript surfaced "the password leaked in plain text", and
+the vault's open threads already held "the RCON password leaked into an open chat" and
+"the forwarding secret hit the log twice".
 
 It warns and never blocks. That is a deliberate choice, not an oversight: the note is
 written either way and the warning rides along with it.
