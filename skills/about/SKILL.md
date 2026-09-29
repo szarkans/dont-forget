@@ -83,9 +83,9 @@ checked it now. Do not hand the user a stale observation with the confidence of 
 standing rule. When `dies_when` names an event that has plausibly already happened, say
 the note may be dead rather than presenting it as current.
 
-`died` is that judgement already made: someone confirmed in an audit that the condition
-arrived, on the date the field carries. Such a note is still returned — nothing is ever
-hidden — but it must never be quoted as current. Say the condition has arrived and give
+`died` is that judgement already made: the claim was confirmed dead, or a later card
+replaced it, on the date the field carries. Such a note is still returned — nothing is ever
+hidden — but it must never be quoted as current. Say it is dead and give
 the date, and treat the claim as a record of what was once true. A dead note whose warning
 you drop is worse than a missing one: the reader acts on it with confidence.
 

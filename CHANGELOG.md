@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.13.0 — 2026-09-29
+
+### Removed
+- The audit no longer lists every `dies-when` condition or pairs of notes that came back
+  in the same searches. It reports only names the vault links to that no note answers.
+  - Why: of 230 conditions only 13 were ever ruled on and most could not be checked; the
+    pairs were almost all a card and the session it was written in.
+- The writer no longer asks for `volatility`.
+  - Why: it was filled on a fifth of the notes and no code ever read it.
+
+### Changed
+- `dies-when` is asked for only on claims about things outside the user's control that
+  can go false with nobody writing a correction — a service's rules, a price, a model's
+  prompting advice. Recall still reads it; nothing sweeps it on a schedule.
+  - Why: this is the case the field was made for (a research note that quietly goes
+    stale); for everything else a later card does the job.
+
+### Added
+- When a new card corrects an old one, the old card gets `died:` in the same step, and the
+  new one links it as `supersedes`.
+  - Why: without the mark, search kept ranking a fix that had stopped working first.
+- A card about a tool names the version it was seen on.
+  - Why: a reader can then tell whether it still applies.
+
 ## 0.12.1 — 2026-09-19
 
 ### Fixed

@@ -8,3 +8,4 @@ research_workspace/
 .pytest_cache/
 CLAUDE.md
 graphify-out/
+.memsearch/

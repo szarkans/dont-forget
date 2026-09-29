@@ -71,24 +71,25 @@ model: inherit
 - [ ] Give a fact or insight a claim-title, a BLUF, and supporting evidence.
 - [ ] Add `kind:` only for `decision`, `gotcha`, `principle`, `pain`, or `stance`;
   facts and insights do not receive it.
-- [ ] Ask once of every note: can this claim become false while the note stays
-  unchanged, because some external fact shifts under it — a DNS record, a version, a
-  price, a one-off measurement? If yes, add a `dies-when:` frontmatter field naming
-  that event (`dies-when: DNS record for the bridge is repointed`). If no — a
-  permanent rule — omit it; do not invent a condition to fill the slot. It rides in
-  frontmatter, not the body, so search surfaces it on every fragment of the note
-  rather than only when its paragraph happens to match.
-- [ ] Add `volatility: hot | warm | cold` — how fast the claim goes out of date, which
-  is a different question from how important it is. `hot` is weeks: a version, a
-  running address, a plan in flight. `warm` is months: a project convention, a team
-  habit, a tool's current quirk. `cold` is years: a principle, a physical constraint,
-  a post-mortem. Judge it from those definitions rather than reaching for the middle;
-  nothing reads the field yet, and it is being collected precisely to find out whether
-  the judgement is real, so a reflex `warm` on everything makes the field worthless.
+- [ ] If this card corrects or refutes an existing card — a fix that stopped working, a
+  version that changed the behaviour — the new card links it as `supersedes [[Old]]`, and
+  in the same step the old card gets `died: YYYY-MM-DD` in its frontmatter, written back
+  with `action: "replace"` and its `expected_sha`. Nothing else in the old card changes.
+  Without the mark, search keeps ranking the stale fix first: the link from the new card
+  alone does not reach a reader who only found the old one.
+- [ ] A claim about something outside the user's control that can go false with nobody
+  around to write a correction — a service's rules, a price, a model's prompting advice, a
+  DNS record — gets a `dies-when:` frontmatter field naming the event that ends it
+  (`dies-when: DNS record for the bridge is repointed`). Recall reads it and says "may be
+  dead" when the event has plausibly happened; nothing sweeps these conditions on a
+  schedule. A permanent rule, or a claim a later card would correct, gets no condition —
+  do not invent one to fill the slot.
+- [ ] A claim about a tool's behaviour names the version it was seen on
+  (`codex-cli 0.155`), so a reader can tell whether it still applies.
 
 - [ ] Every vault note needs YAML frontmatter. Include `type: atom`, creation `date`,
-  `tags` with `atom` as the first tag, `source` identifying where the knowledge came
-  from, and `volatility`. Add `aliases` only when useful and `project` when the claim
+  `tags` with `atom` as the first tag, and `source` identifying where the knowledge came
+  from. Add `aliases` only when useful and `project` when the claim
   is project-bound. A project is any domain the user works in, not only a repository:
   a game they design, their training, their health, their own habits all count, and
   each gets a `project:` of its own (`gamedev`, `gym`, `self`) so recall on "load" or
