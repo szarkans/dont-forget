@@ -68,8 +68,8 @@ sources by `path` and never present the fragment count as the note count. Treat
 `heading` as local context and `found_by` as an explanation of why a fragment appears
 in the results, not as evidence by itself.
 
-`found_by: meaning` means the fragment had no text-lane match and came from
-semantic similarity. Check its text before treating it as an answer.
+`found_by: meaning` means the fragment had no text-lane match and passed the
+semantic similarity floor. Check its text before treating it as an answer.
 
 A fragment also carries `kind`, `source` and `project`. `kind` is the genre of the claim —
 new notes carry `decision`, `gotcha`, `principle`, `pain` or `stance`, and older ones may
@@ -139,6 +139,7 @@ cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`.
 `semantic` says `ready`, `partial: X of Y chunks`, or `off: reason`; complete a
 partial first pass with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/index.py" --embed`.
 `semantic_pool_examined` and `returned_by_meaning` show the semantic lane's reach.
+If `semantic_old_vector_files` appears, those model-specific caches are retained on disk.
 By default,
 `matched_chunks` and `pool_examined` describe own notes; `matched_lead_chunks`,
 `pool_examined_leads` and `returned_leads` describe the lead tail. `pool_examined`
@@ -147,7 +148,7 @@ counts candidates admitted to result selection; when it is smaller than
 
 `weak_match: true` is the most important field. By default it means the user's own notes
 cannot answer this: their closest chunk covers too little of what the question is about.
-It is false when either text coverage or a strong semantic hit clears the threshold;
+It is false when either text coverage or a strong returned meaning fragment clears the threshold;
 read that hit before concluding it answers the question.
 Any returned leads are untried possibilities, not the user's answer. Say that first, before
 anything else. Then you may show what came closest, clearly labelled as such. Never

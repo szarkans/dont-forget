@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from common import DEFAULT_DB, NotConfigured, connect_ro, vault_from_config
+from semantic import vector_db_path
 
 FM_LINE = re.compile(r"^([A-Za-z_][\w-]*):\s*(.*)$")
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
@@ -187,6 +188,8 @@ def _unscalar(raw) -> list[str]:
 
 
 TOKENIZER = "porter unicode61 remove_diacritics 2"
+# The pre-split index contained vectors from this exact Granite revision.
+LEGACY_VECTOR_FILE = "vectors-granite-embedding-311m-multilingual-r2-443995599303.db"
 
 
 def schema_stale(db_path: Path) -> bool:
@@ -208,10 +211,32 @@ def schema_stale(db_path: Path) -> bool:
             or not {"aliases", "dies_when", "died", "kind", "source"} <= columns)
 
 
+def migrate_vectors(db_path: Path) -> int:
+    """Move legacy vectors before a rebuild can unlink their old index file."""
+    if not db_path.exists():
+        return 0
+    con = sqlite3.connect(db_path)
+    try:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_vectors'").fetchone():
+            return 0
+        con.execute("ATTACH DATABASE ? AS vectors", (str(db_path.with_name(LEGACY_VECTOR_FILE)),))
+        with con:
+            con.execute("CREATE TABLE IF NOT EXISTS vectors.chunk_vectors "
+                        "(hash TEXT PRIMARY KEY, vector BLOB NOT NULL, dim INTEGER NOT NULL)")
+            cursor = con.execute("INSERT OR IGNORE INTO vectors.chunk_vectors "
+                                 "SELECT hash,vector,dim FROM main.chunk_vectors")
+            inserted = cursor.rowcount
+            con.execute("DROP TABLE main.chunk_vectors")
+        return inserted
+    finally:
+        con.close()
+
+
 def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dict:
     started = time.perf_counter()
     vault = vault.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
+    migrated = migrate_vectors(db_path)
     if (rebuild or schema_stale(db_path)) and db_path.exists():
         db_path.unlink()
     con = sqlite3.connect(db_path)
@@ -289,19 +314,22 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
         for rowid, name in con.execute("SELECT rowid,dst_name FROM links"):
             target = names.get(name.casefold())
             con.execute("UPDATE links SET dst_note_id_or_null=? WHERE rowid=?", (target, rowid))
-        if (reindexed or stale) and con.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_vectors'").fetchone():
-            # Vectors are content-addressed, so recreated chunk IDs keep their vectors.
-            # Delete only hashes no longer present anywhere in the current index.
+    counts = [con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("notes", "chunks", "links")]
+    if reindexed or stale or rebuild or migrated:
+        vectors_path = vector_db_path(db_path)
+        if vectors_path.exists():
+            # Content hashes survive recreated chunk IDs. Materialise both sides
+            # before deleting, rather than iterating the table being modified.
             live_hashes = {hashlib.sha256(body.encode()).hexdigest()
                            for (body,) in con.execute("SELECT body FROM chunks")}
-            con.executemany("DELETE FROM chunk_vectors WHERE hash=?",
-                            ((digest,) for (digest,) in con.execute("SELECT hash FROM chunk_vectors")
-                             if digest not in live_hashes))
-    counts = [con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("notes", "chunks", "links")]
+            with sqlite3.connect(vectors_path) as vectors:
+                old_hashes = [digest for (digest,) in vectors.execute("SELECT hash FROM chunk_vectors")]
+                vectors.executemany("DELETE FROM chunk_vectors WHERE hash=?",
+                                    ((digest,) for digest in old_hashes if digest not in live_hashes))
     con.close()
     return {"notes": counts[0], "chunks": counts[1], "links": counts[2], "reindexed": reindexed,
-            "deleted": len(set(known) - disk_paths), "seconds": round(time.perf_counter() - started, 3)}
+            "deleted": len(set(known) - disk_paths), "migrated_vectors": migrated,
+            "seconds": round(time.perf_counter() - started, 3)}
 
 
 def refresh_index(vault: Path | None = None, db_path: Path | None = None) -> str | None:

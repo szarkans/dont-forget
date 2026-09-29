@@ -49,10 +49,11 @@ MIN_STEM = 3
 # is caught until 0.6 while the false refusals climb 2, 4, 5, 8. So 0.4 buys the last
 # refusal that is free.
 WEAK_COVERAGE = 0.4
-# Highest tested threshold that avoided false weak_match for every returned
-# labelled answer in the 34-query set. Cosine alone did not separate all misses;
-# see the hybrid report for the sweep and its limits.
+# STRONG_COSINE, COSINE_FLOOR, and RRF constants are bound to Granite R2 and set on 34 queries.
 STRONG_COSINE = 0.85
+COSINE_FLOOR = 0.90
+RRF_K = 10
+RRF_MEANING_WEIGHT = 1.2
 # A ticket or PR id: "BTS-226", "TE-311", "PR 498", "PR #498", "issue 12". A bare "#12"
 # is not one — filenames cannot hold "#", so it can only ever match digits in a date.
 TICKET = re.compile(r"\b[A-Za-zА-Яа-я]{2,}-\d+\b|\b(?:PR|MR|issue)\s*#?\d+\b", re.I)
@@ -278,7 +279,9 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
             for row in rows]
     text.sort(key=lambda item: (-item["score"], item["_bm25"]))
     text_count = len(text)
-    semantic_ranks = (semantic or {}).get("rankings", {}).get(scope, [])
+    semantic_ranks = [(chunk_id, score) for chunk_id, score in
+                      (semantic or {}).get("rankings", {}).get(scope, [])
+                      if score > COSINE_FLOOR]
     semantic_scores = {chunk_id: score for chunk_id, score in semantic_ranks}
     if semantic_ranks:
         by_id = {item["_id"]: item for item in text}
@@ -300,8 +303,9 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
         # budget; 1.2 compensates for the lexical lane's many dual-lane candidates.
         for item in by_id.values():
             chunk_id = item["_id"]
-            item["_fusion"] = (1 / (10 + lexical_ranks[chunk_id]) if chunk_id in lexical_ranks else 0)
-            item["_fusion"] += (1.2 / (10 + meaning_ranks[chunk_id]) if chunk_id in meaning_ranks else 0)
+            item["_fusion"] = (1 / (RRF_K + lexical_ranks[chunk_id]) if chunk_id in lexical_ranks else 0)
+            item["_fusion"] += (RRF_MEANING_WEIGHT / (RRF_K + meaning_ranks[chunk_id])
+                                if chunk_id in meaning_ranks else 0)
         text = sorted(by_id.values(), key=lambda item: (-item["_fusion"],
                        lexical_ranks.get(item["_id"], POOL + 1), item["_id"]))[:POOL]
     # Half of the user's real questions to memory are "where did we stop on BTS-226",
@@ -317,9 +321,8 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
     if weak and ids and any(_ticket_key(m) in ids for item in text[:3]
                             for m in TICKET.findall(item["path"])):
         weak = False
+    weak_without_semantic = weak
     best_cosine = (semantic or {}).get("best_cosine", {}).get(scope)
-    if weak and best_cosine is not None and best_cosine >= STRONG_COSINE:
-        weak = False
 
     # Text fills first, then neighbours take the remainder. Only if neighbours exist
     # and got nothing does the text tail give up the reserved slice — that is the
@@ -332,7 +335,9 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
         if item["_note"] not in [note for note, _ in seeds]:
             seeds.append((item["_note"], item["score"]))
     seen_chunks = {item["_id"] for item in text}
-    links, skipped, neighbour_notes = ([], [], 0) if weak else _neighbours(
+    strong_returned = any(item["found_by"] == "meaning" and item["score"] >= STRONG_COSINE
+                          for item in kept_text)
+    links, skipped, neighbour_notes = ([], [], 0) if weak and not strong_returned else _neighbours(
         con, seeds, hub_cap, seen_chunks, scope)
     if extra_links:
         # Leads reached from an own note's link belong in the lead tail. Text matches
@@ -348,6 +353,9 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
         kept_text, _ = apply_budget(text, budget - int(budget * graph_share))
         kept_links, _ = apply_budget(links, budget - _size(kept_text))
     kept = kept_text + kept_links
+    if weak and any(item["found_by"] == "meaning" and item["score"] >= STRONG_COSINE
+                    for item in kept):
+        weak = False
     for item in kept:
         for private in ("_id", "_note", "_bm25", "_fusion"):
             item.pop(private, None)
@@ -361,6 +369,7 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
         "best_terms_matched": max(matched_content.values(), default=0),
         "best_mass_share": math.floor(mass_share * 1000) / 1000,
         "unmatched_terms": unmatched, "weak_match": weak,
+        "_weak_without_semantic": weak_without_semantic,
         "bytes_used": _size(kept), "budget_bytes": budget,
         "skipped_hubs": skipped, "expanded_notes": len(seeds) - len(skipped),
         "graph_neighbor_notes": neighbour_notes}}
@@ -399,7 +408,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
                 # weakest own fragments — never the first, never more than a share of
                 # the budget, so a small budget still opens with an own note.
                 matching = [f for f in lead["fragments"]
-                            if not lead["coverage"]["weak_match"] or f["found_by"] == "link"]
+                            if not lead["coverage"]["weak_match"] or f["found_by"] != "meaning"]
                 tail = matching[:LEAD_TAIL]
                 freed, allowance = 0, int(budget * LEAD_RESERVE_SHARE)
                 while tail and len(own) > 1 and _size(own) + _size(tail) > budget:
@@ -413,9 +422,16 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             else:
                 # A thin or weak own answer lets leads fill whatever it left, so a
                 # question only leads can answer still gets one.
-                tail, _ = apply_budget(lead["fragments"], budget - _size(own))
+                lead_candidates = [f for f in lead["fragments"]
+                                   if not lead["coverage"]["weak_match"] or f["found_by"] != "meaning"]
+                tail, _ = apply_budget(lead_candidates, budget - _size(own))
             result["fragments"] = own + tail
             own_cov, lead_cov = result["coverage"], lead["coverage"]
+            if own_cov.pop("_weak_without_semantic"):
+                own_cov["weak_match"] = not any(
+                    item["found_by"] == "meaning" and item["score"] >= STRONG_COSINE
+                    for item in own)
+            lead_cov.pop("_weak_without_semantic")
             own_cov["returned"] = len(result["fragments"])
             own_cov["returned_leads"] = len(tail)
             own_cov["matched_lead_chunks"] = lead_cov["matched_chunks"]
@@ -430,9 +446,12 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             own_cov["expanded_notes"] += lead_cov["expanded_notes"]
             own_cov["graph_neighbor_notes"] += lead_cov["graph_neighbor_notes"]
         else:
+            result["coverage"].pop("_weak_without_semantic")
             result["coverage"]["returned_leads"] = sum(
                 item["type"] == "lead" for item in result["fragments"])
         result["coverage"]["semantic"] = semantic["semantic"]
+        if semantic.get("old_vector_files"):
+            result["coverage"]["semantic_old_vector_files"] = semantic["old_vector_files"]
         if semantic["semantic"].startswith("partial:"):
             result["coverage"]["semantic_next_step"] = "Run scripts/index.py --embed (with the same --vault and --db for an isolated index)"
         result["coverage"]["semantic_embedded_chunks"] = semantic.get("embedded_chunks", 0)
