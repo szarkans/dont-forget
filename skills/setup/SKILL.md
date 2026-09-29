@@ -50,6 +50,12 @@ they are the first evidence that the plugin can actually see the notes. Zero not
 folder the user believed was full means the wrong folder was chosen; say so rather than
 reporting success.
 
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" --install-semantic` to create
+the plugin venv with CPU PyTorch and Granite dependencies. Then run
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/index.py" --embed` for the first full
+vector pass; it can take about 32 minutes on a CPU. Search remains word-only if
+installation fails, and its `coverage.semantic` says why.
+
 Close by naming what the user can do next: recall with `/dont-forget:about`, save with
 `/dont-forget:that`. A digest of the freshest open threads and gotchas appears on its own
 at the start of the next session, so mention that it needs a restart to show up.

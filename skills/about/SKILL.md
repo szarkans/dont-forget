@@ -68,6 +68,9 @@ sources by `path` and never present the fragment count as the note count. Treat
 `heading` as local context and `found_by` as an explanation of why a fragment appears
 in the results, not as evidence by itself.
 
+`found_by: meaning` means the fragment had no text-lane match and came from
+semantic similarity. Check its text before treating it as an answer.
+
 A fragment also carries `kind`, `source` and `project`. `kind` is the genre of the claim —
 new notes carry `decision`, `gotcha`, `principle`, `pain` or `stance`, and older ones may
 carry values no longer written — and it is the fastest way to tell a trap worth warning
@@ -132,7 +135,11 @@ own knowledge, say plainly that it did not come from the vault.
 
 End the answer with a separate concise report drawn from `coverage`: matching
 chunks (`matched_chunks`), how many fragments came back (`returned`), how many were
-cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`. By default,
+cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`.
+`semantic` says `ready`, `partial: X of Y chunks`, or `off: reason`; complete a
+partial first pass with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/index.py" --embed`.
+`semantic_pool_examined` and `returned_by_meaning` show the semantic lane's reach.
+By default,
 `matched_chunks` and `pool_examined` describe own notes; `matched_lead_chunks`,
 `pool_examined_leads` and `returned_leads` describe the lead tail. `pool_examined`
 counts candidates admitted to result selection; when it is smaller than
@@ -140,6 +147,8 @@ counts candidates admitted to result selection; when it is smaller than
 
 `weak_match: true` is the most important field. By default it means the user's own notes
 cannot answer this: their closest chunk covers too little of what the question is about.
+It is false when either text coverage or a strong semantic hit clears the threshold;
+read that hit before concluding it answers the question.
 Any returned leads are untried possibilities, not the user's answer. Say that first, before
 anything else. Then you may show what came closest, clearly labelled as such. Never
 synthesise a confident answer over a weak match, and never let a weak match produce a
@@ -150,6 +159,8 @@ conclusion the user could act on. `best_mass_share`, `best_terms_matched` and
 any form: the search already shortened each one looking for another grammatical form and
 found nothing. By default, a word listed there is a hole in the user's own notes; a lead
 may still mention it. The flag above can stay off while
+the semantic lane finds a differently phrased answer. In that case, inspect the
+meaning hit before calling the word a missing subject. Otherwise,
 the hole is exactly what was asked about. Name the missing word first, in the user's own
 words, before summarising anything, and never let neighbouring material stand in for it.
 A vault rich in the surrounding topic will otherwise answer a question it was never

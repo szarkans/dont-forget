@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("setup.py")
 sys.path.insert(0, str(Path(__file__).parent))
@@ -110,5 +111,17 @@ with tempfile.TemporaryDirectory() as tmp:
 
     assert "not a directory" in run(home, "--set", str(root / "nope"), expect_ok=False)
     assert "--detect or --set" in run(home, expect_ok=False)
+
+# Installation uses uv and a CPU torch wheel, but this test never installs packages.
+import setup  # noqa: E402
+with tempfile.TemporaryDirectory() as tmp:
+    with patch.object(setup, "HOME_DIR", Path(tmp)), patch.object(setup.subprocess, "run") as calls, \
+            patch.object(setup.platform, "system", return_value="Linux"):
+        installed = setup.install_semantic()
+    commands = [call.args[0] for call in calls.call_args_list]
+    assert commands[0] == ["uv", "venv", "--python", "3.12", str(Path(tmp) / "venv")], commands
+    assert "https://download.pytorch.org/whl/cpu" in commands[1], commands
+    assert "sentence-transformers" in commands[2] and "--torch-backend=cpu" in commands[2], commands
+    assert installed["semantic"] == "installed", installed
 
 print("ok")

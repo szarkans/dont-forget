@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shlex
 import sqlite3
 import sys
 from collections import Counter
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from common import DEFAULT_DB, DEFAULT_QUERY_LOG, NotConfigured, connect_ro, vault_from_config
 from index import refresh_index, schema_stale
+from semantic import run as semantic_run
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
 # How many matching chunks can reach the byte-budget stage. The pool is reported, so a
@@ -47,6 +49,10 @@ MIN_STEM = 3
 # is caught until 0.6 while the false refusals climb 2, 4, 5, 8. So 0.4 buys the last
 # refusal that is free.
 WEAK_COVERAGE = 0.4
+# Highest tested threshold that avoided false weak_match for every returned
+# labelled answer in the 34-query set. Cosine alone did not separate all misses;
+# see the hybrid report for the sweep and its limits.
+STRONG_COSINE = 0.85
 # A ticket or PR id: "BTS-226", "TE-311", "PR 498", "PR #498", "issue 12". A bare "#12"
 # is not one — filenames cannot hold "#", so it can only ever match digits in a date.
 TICKET = re.compile(r"\b[A-Za-zА-Яа-я]{2,}-\d+\b|\b(?:PR|MR|issue)\s*#?\d+\b", re.I)
@@ -209,7 +215,8 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
 
 def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], budget: int,
                  hub_cap: int, graph_share: float, scope: str,
-                 extra_links: list[dict] | None = None) -> tuple[dict, list[tuple[int, float]], set[int]]:
+                 extra_links: list[dict] | None = None,
+                 semantic: dict | None = None) -> tuple[dict, list[tuple[int, float]], set[int]]:
     terms = widen(con, parsed_terms, scope)
     hits, weights = term_weights(con, terms, scope)
 
@@ -270,6 +277,33 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
              "found_by": "text", "_id": row["id"], "_note": row["note_id"], "_bm25": row["rank"]}
             for row in rows]
     text.sort(key=lambda item: (-item["score"], item["_bm25"]))
+    text_count = len(text)
+    semantic_ranks = (semantic or {}).get("rankings", {}).get(scope, [])
+    semantic_scores = {chunk_id: score for chunk_id, score in semantic_ranks}
+    if semantic_ranks:
+        by_id = {item["_id"]: item for item in text}
+        ids = [chunk_id for chunk_id, _ in semantic_ranks if chunk_id not in by_id]
+        if ids:
+            marks = ",".join("?" for _ in ids)
+            for row in con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body
+                    FROM chunks c JOIN notes n ON n.id=c.note_id WHERE c.id IN ({marks}){_scope_where(scope)}""", ids):
+                by_id[row["id"]] = {"path": row["path"], "type": row["type"], "kind": row["kind"],
+                    "source": row["source"], "project": row["project"], "date": row["date"],
+                    "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
+                    "heading": row["heading_path"], "text": row["body"],
+                    "score": semantic_scores[row["id"]], "terms_matched": 0, "found_by": "meaning",
+                    "_id": row["id"], "_note": row["note_id"], "_bm25": 0}
+        lexical_ranks = {item["_id"]: rank for rank, item in enumerate(text, 1)}
+        meaning_ranks = {chunk_id: rank for rank, (chunk_id, _) in enumerate(semantic_ranks, 1)}
+        # RRF keeps exact lexical matches useful while allowing a paraphrase with no
+        # shared words to compete. A small k gives high semantic ranks room in a byte
+        # budget; 1.2 compensates for the lexical lane's many dual-lane candidates.
+        for item in by_id.values():
+            chunk_id = item["_id"]
+            item["_fusion"] = (1 / (10 + lexical_ranks[chunk_id]) if chunk_id in lexical_ranks else 0)
+            item["_fusion"] += (1.2 / (10 + meaning_ranks[chunk_id]) if chunk_id in meaning_ranks else 0)
+        text = sorted(by_id.values(), key=lambda item: (-item["_fusion"],
+                       lexical_ranks.get(item["_id"], POOL + 1), item["_id"]))[:POOL]
     # Half of the user's real questions to memory are "where did we stop on BTS-226",
     # not "what breaks in X": a ticket id and filler. Coverage by word mass is weak on
     # those by construction, yet the note titled with that ticket is sitting in the top
@@ -282,6 +316,9 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
     ids = {_ticket_key(m) for m in TICKET.findall(query)}
     if weak and ids and any(_ticket_key(m) in ids for item in text[:3]
                             for m in TICKET.findall(item["path"])):
+        weak = False
+    best_cosine = (semantic or {}).get("best_cosine", {}).get(scope)
+    if weak and best_cosine is not None and best_cosine >= STRONG_COSINE:
         weak = False
 
     # Text fills first, then neighbours take the remainder. Only if neighbours exist
@@ -312,10 +349,12 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
         kept_links, _ = apply_budget(links, budget - _size(kept_text))
     kept = kept_text + kept_links
     for item in kept:
-        for private in ("_id", "_note", "_bm25"):
+        for private in ("_id", "_note", "_bm25", "_fusion"):
             item.pop(private, None)
     result = {"fragments": kept, "coverage": {
         "matched_chunks": len(mass), "pool_examined": len(text), "returned": len(kept),
+        "text_pool_examined": text_count, "semantic_pool_examined": len(semantic_ranks),
+        "semantic_best_cosine": best_cosine,
         "returned_by_link": len(kept_links),
         "dropped_by_budget": len(text) + len(links) - len(kept),
         "query_terms": len(terms), "content_terms": len(content),
@@ -338,11 +377,12 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
                 "returned_leads": 0, "dropped_by_budget": 0, "weak_match": False,
                 "skipped_hubs": []}}
+    semantic = semantic_run(db_path, query)
     con = connect_ro(db_path)
     con.row_factory = sqlite3.Row
     try:
         result, seeds, seen_chunks = _search_tier(
-            con, query, parsed_terms, budget, hub_cap, graph_share, scope)
+            con, query, parsed_terms, budget, hub_cap, graph_share, scope, semantic=semantic)
         if scope == "own":
             # The 618-chunk catalog displaced own notes in 24/120 queries, including
             # eight with no catalog result: it occupied the bm25 pool and changed word
@@ -350,7 +390,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             cross_links, _, _ = ([], [], 0) if result["coverage"]["weak_match"] else _neighbours(
                 con, seeds, hub_cap, seen_chunks, "leads")
             lead, _, _ = _search_tier(con, query, parsed_terms, budget, hub_cap,
-                                      graph_share, "leads", cross_links)
+                                      graph_share, "leads", cross_links, semantic)
             own, own_cov = result["fragments"], result["coverage"]
             if own_cov["dropped_by_budget"] and not own_cov["weak_match"]:
                 # The user asked for "own notes, plus a little of what I saved": a dense
@@ -380,6 +420,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             own_cov["returned_leads"] = len(tail)
             own_cov["matched_lead_chunks"] = lead_cov["matched_chunks"]
             own_cov["pool_examined_leads"] = lead_cov["pool_examined"]
+            own_cov["semantic_pool_examined_leads"] = lead_cov["semantic_pool_examined"]
             own_cov["tail_omitted"] = len(lead["fragments"]) - len(tail)
             own_cov["returned_by_link"] = sum(item["found_by"] == "link" for item in result["fragments"])
             own_cov["dropped_by_budget"] += lead_cov["dropped_by_budget"]
@@ -391,6 +432,13 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         else:
             result["coverage"]["returned_leads"] = sum(
                 item["type"] == "lead" for item in result["fragments"])
+        result["coverage"]["semantic"] = semantic["semantic"]
+        if semantic["semantic"].startswith("partial:"):
+            result["coverage"]["semantic_next_step"] = "Run scripts/index.py --embed (with the same --vault and --db for an isolated index)"
+        result["coverage"]["semantic_embedded_chunks"] = semantic.get("embedded_chunks", 0)
+        result["coverage"]["semantic_total_chunks"] = semantic.get("total_chunks", 0)
+        result["coverage"]["returned_by_meaning"] = sum(
+            item["found_by"] == "meaning" for item in result["fragments"])
         return result
     finally:
         con.close()
@@ -428,6 +476,12 @@ def main() -> None:
         raise SystemExit(f"{index_error} The existing index was built by an older version "
                          "and cannot be searched until the refresh succeeds and rebuilds it.")
     result = search(query, budget, hub_cap, db_path, args.graph_share, scope)
+    if result["coverage"].get("semantic", "").startswith("partial:"):
+        command = ["python3", str(Path(__file__).with_name("index.py").resolve()), "--embed",
+                   "--db", str(db_path)]
+        if args.vault is not None:
+            command.extend(("--vault", str(args.vault)))
+        result["coverage"]["semantic_next_step"] = shlex.join(command)
     # Every fragment path is vault-relative, so without the root the reader cannot open
     # the note an excerpt was cut out of — and starts guessing where the vault lives.
     try:

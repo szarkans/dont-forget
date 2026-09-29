@@ -289,6 +289,15 @@ def build(vault: Path, db_path: Path = DEFAULT_DB, rebuild: bool = False) -> dic
         for rowid, name in con.execute("SELECT rowid,dst_name FROM links"):
             target = names.get(name.casefold())
             con.execute("UPDATE links SET dst_note_id_or_null=? WHERE rowid=?", (target, rowid))
+        if (reindexed or stale) and con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='chunk_vectors'").fetchone():
+            # Vectors are content-addressed, so recreated chunk IDs keep their vectors.
+            # Delete only hashes no longer present anywhere in the current index.
+            live_hashes = {hashlib.sha256(body.encode()).hexdigest()
+                           for (body,) in con.execute("SELECT body FROM chunks")}
+            con.executemany("DELETE FROM chunk_vectors WHERE hash=?",
+                            ((digest,) for (digest,) in con.execute("SELECT hash FROM chunk_vectors")
+                             if digest not in live_hashes))
     counts = [con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] for table in ("notes", "chunks", "links")]
     con.close()
     return {"notes": counts[0], "chunks": counts[1], "links": counts[2], "reindexed": reindexed,
@@ -318,6 +327,7 @@ def main() -> None:
     parser.add_argument("--vault", type=Path)
     parser.add_argument("--rebuild", action="store_true")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
+    parser.add_argument("--embed", action="store_true", help="embed all missing chunks after indexing")
     args = parser.parse_args()
     vault = args.vault
     if vault is None:
@@ -327,7 +337,11 @@ def main() -> None:
             raise SystemExit(str(error)) from None
     if not vault.is_dir():
         raise SystemExit(f"vault is not a directory: {vault}")
-    print(json.dumps(build(vault, args.db, args.rebuild), ensure_ascii=False))
+    result = build(vault, args.db, args.rebuild)
+    if args.embed:
+        from semantic import run
+        result["embedding"] = run(args.db, full=True)
+    print(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == "__main__":

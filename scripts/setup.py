@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -71,16 +73,37 @@ def configure(raw: str) -> dict:
     return {"configured": str(vault), "config_path": str(CONFIG_PATH), "index": build(vault, DEFAULT_DB)}
 
 
+def install_semantic() -> dict:
+    """Keep model dependencies in a plugin-owned venv, outside hook Python."""
+    venv = HOME_DIR / "venv"
+    python = venv / "bin" / "python"
+    # The reference Granite environment is Python 3.12; use its established wheel set
+    # even when the hook's system python has moved ahead.
+    subprocess.run(["uv", "venv", "--python", "3.12", str(venv)], check=True)
+    torch_command = ["uv", "pip", "install", "--python", str(python), "torch"]
+    if platform.system() == "Linux":
+        torch_command += ["--index-url", "https://download.pytorch.org/whl/cpu"]
+    subprocess.run(torch_command, check=True)
+    sentence_command = ["uv", "pip", "install", "--python", str(python),
+                        "sentence-transformers"]
+    if platform.system() == "Linux":
+        sentence_command.append("--torch-backend=cpu")
+    subprocess.run(sentence_command, check=True)
+    return {"semantic": "installed", "venv": str(venv)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--detect", action="store_true", help="report the current config and every vault found")
     parser.add_argument("--set", dest="vault", help="use this vault, write the config, build the index")
+    parser.add_argument("--install-semantic", action="store_true",
+                        help="create the plugin venv and install CPU embedding dependencies")
     args = parser.parse_args()
-    if not args.detect and not args.vault:
-        parser.error("pass --detect or --set <path>")
+    if not args.detect and not args.vault and not args.install_semantic:
+        parser.error("pass --detect or --set <path> or --install-semantic")
     try:
-        result = configure(args.vault) if args.vault else detect()
-    except (NotConfigured, OSError) as error:
+        result = install_semantic() if args.install_semantic else (configure(args.vault) if args.vault else detect())
+    except (NotConfigured, OSError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
     print(json.dumps(result, ensure_ascii=False, indent=2))
