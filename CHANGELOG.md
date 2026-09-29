@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- Search ranks the user's own notes as if saved, untried notes (`type: lead`) were not in
+  the vault, then ends with up to two relevant leads. `--scope leads` searches only leads
+  (the place to look for ready-made tools before building something); `--scope all` is the
+  previous flat search. `type` is compared case-insensitively.
+  - Why: a 618-entry tool catalog saved as leads pushed own notes out of 24 of 120 real
+    searches. With the split, hit@3 on the labelled questions is the same with or without
+    the catalog (28/53), and `--scope all` returns exactly what the old search did.
+- The writer's duplicate check searches leads too, so a lead saved twice is still caught.
+
 ## 0.13.0 — 2026-09-29
 
 ### Removed

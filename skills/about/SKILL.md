@@ -6,7 +6,7 @@ model: inherit
 
 # dont-forget:about — recall
 
-Search the entire vault for prior context and synthesize one honest answer from
+Search the vault for prior context and synthesize one honest answer from
 what you find. Search already handles prefixes, traverses links, and fits results
 within a byte budget, so do not duplicate that logic manually.
 
@@ -20,6 +20,11 @@ else, and for the detail behind a godnote's claim.
 
 Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
 call, never split the question into several searches: that distorts ranking and coverage.
+
+Default search ranks the user's own notes first and ends with at most two leads
+(more only when the own notes are thin). Present that tail as "also saved, untried". When looking specifically
+for ready-made tools or prior art before building something, search with `--scope leads`;
+use `--scope all` for the flat search across everything.
 
 The query argument is a search query you compose, not the user's sentence. Pick 3-8
 content words: keep ticket ids, project and product names, and technical terms exactly
@@ -125,25 +130,26 @@ own knowledge, say plainly that it did not come from the vault.
 
 ## Coverage
 
-End the answer with a separate concise report drawn from `coverage`: total matching
+End the answer with a separate concise report drawn from `coverage`: matching
 chunks (`matched_chunks`), how many fragments came back (`returned`), how many were
-cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`. `matched_chunks`
-counts the whole vault, while `pool_examined` is how many of those were re-ranked — when
-the two are equal nothing was cut before ranking, and when `pool_examined` is smaller
-say that the tail was never examined.
+cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`. By default,
+`matched_chunks` and `pool_examined` describe own notes; `matched_lead_chunks`,
+`pool_examined_leads` and `returned_leads` describe the lead tail. `pool_examined`
+counts candidates admitted to result selection; when it is smaller than
+`matched_chunks`, the pool limit cut off other matches.
 
-`weak_match: true` is the most important field. It means the vault cannot answer this:
-the closest chunk in it covers too little of what the question is about — the fragments
-are the nearest text, not an answer. Say that first, in the user's words, before
+`weak_match: true` is the most important field. By default it means the user's own notes
+cannot answer this: their closest chunk covers too little of what the question is about.
+Any returned leads are untried possibilities, not the user's answer. Say that first, before
 anything else. Then you may show what came closest, clearly labelled as such. Never
 synthesise a confident answer over a weak match, and never let a weak match produce a
 conclusion the user could act on. `best_mass_share`, `best_terms_matched` and
 `content_terms` are the numbers behind the flag.
 
-`unmatched_terms` lists the words of the question the vault does not contain at all, in
+`unmatched_terms` lists the words of the question the searched tier does not contain, in
 any form: the search already shortened each one looking for another grammatical form and
-found nothing. A word listed there is a hole in the answer, not a detail — whatever the
-fragments say, they do not say it about that word, and the flag above can stay off while
+found nothing. By default, a word listed there is a hole in the user's own notes; a lead
+may still mention it. The flag above can stay off while
 the hole is exactly what was asked about. Name the missing word first, in the user's own
 words, before summarising anything, and never let neighbouring material stand in for it.
 A vault rich in the surrounding topic will otherwise answer a question it was never

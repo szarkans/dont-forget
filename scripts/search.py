@@ -18,13 +18,17 @@ from common import DEFAULT_DB, DEFAULT_QUERY_LOG, NotConfigured, connect_ro, vau
 from index import refresh_index, schema_stale
 
 WORD = re.compile(r"[^\W_]+", re.UNICODE)
-# How many top-bm25 chunks are re-ranked. The pool is reported, so a query that
-# fills it is visibly a query whose full result set was never examined.
+# How many matching chunks can reach the byte-budget stage. The pool is reported, so a
+# query that fills it is visibly one whose remaining candidates were not considered.
 POOL = 500
 # A word sitting in more than this share of the vault carries no information about which
 # chunk is meant, so it is not allowed to move the ranking. This is what replaces a list
 # of stopwords: the vault is its own corpus, and no list has to be written per language.
 COMMON_ABOVE = 0.05
+# The default search keeps room for this many saved, untried leads after the own notes,
+# never more than this share of the budget: own notes stay first even on a small budget.
+LEAD_TAIL = 2
+LEAD_RESERVE_SHARE = 0.25
 # ...but a share of a tiny vault is noise: in a vault of forty chunks, five percent is
 # two, and every real word looks common. A word has to actually be spread around before
 # its share means anything.
@@ -74,11 +78,22 @@ def fts_query(query: str) -> str:
     return " OR ".join(parse_terms(query))
 
 
-def _hits(con: sqlite3.Connection, term: str) -> int:
-    return con.execute("SELECT count(*) FROM chunks_fts WHERE chunks_fts MATCH ?", (term,)).fetchone()[0]
+def _scope_where(scope: str) -> str:
+    if scope == "own":
+        return " AND lower(trim(coalesce(n.type, ''))) != 'lead'"
+    if scope == "leads":
+        return " AND lower(trim(coalesce(n.type, ''))) = 'lead'"
+    return ""
 
 
-def widen(con: sqlite3.Connection, terms: list[str]) -> dict[str, str]:
+def _hits(con: sqlite3.Connection, term: str, scope: str = "all") -> int:
+    return con.execute("SELECT count(*) FROM chunks_fts "
+                       "JOIN chunks c ON c.id=chunks_fts.rowid "
+                       f"JOIN notes n ON n.id=c.note_id WHERE chunks_fts MATCH ?{_scope_where(scope)}",
+                       (term,)).fetchone()[0]
+
+
+def widen(con: sqlite3.Connection, terms: list[str], scope: str = "all") -> dict[str, str]:
     """Cut each prefix term back to the stem the vault itself shows, not one from a list.
 
     A word typed in one grammatical form does not prefix-match the same word written in
@@ -97,7 +112,7 @@ def widen(con: sqlite3.Connection, terms: list[str]) -> dict[str, str]:
         origin = term.strip('*').strip('"').replace('""', '"')
         if term.endswith('*'):
             word = term[1:-2]
-            count = _hits(con, term)
+            count = _hits(con, term, scope)
             # A word the vault does not have at all may be a form of a word it does, so
             # it keeps shrinking — but it may equally be a typo, and there is no way to
             # tell. Half the word is as far as that guess is allowed to go: without the
@@ -106,7 +121,7 @@ def widen(con: sqlite3.Connection, terms: list[str]) -> dict[str, str]:
             for cut in range(len(word) - 1, MIN_STEM - 1, -1):
                 if not count and cut < absent_floor:
                     break
-                wider = _hits(con, f'"{word[:cut]}"*')
+                wider = _hits(con, f'"{word[:cut]}"*', scope)
                 if count and (wider + 1) / (count + 1) < PREFIX_GROWTH:
                     break
                 word, count = word[:cut], wider
@@ -115,15 +130,18 @@ def widen(con: sqlite3.Connection, terms: list[str]) -> dict[str, str]:
     return widened
 
 
-def term_weights(con: sqlite3.Connection, terms: list[str]) -> tuple[dict[str, set[int]], dict[str, float]]:
+def term_weights(con: sqlite3.Connection, terms: list[str], scope: str = "all") -> tuple[dict[str, set[int]], dict[str, float]]:
     """Ask SQLite which chunks each term hits, and how rare that term is.
 
     Asking per term instead of reproducing the tokenizer in Python is the only way
     the weights cannot drift from what the index actually matched.
     """
-    total = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
+    total = con.execute("SELECT count(*) FROM chunks c JOIN notes n ON n.id=c.note_id "
+                        f"WHERE 1=1{_scope_where(scope)}").fetchone()[0] or 1
     hits = {term: {row[0] for row in con.execute(
-        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?", (term,))} for term in terms}
+        "SELECT c.id FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid "
+        f"JOIN notes n ON n.id=c.note_id WHERE chunks_fts MATCH ?{_scope_where(scope)}",
+        (term,))} for term in terms}
     weights = {term: math.log(1 + total / (1 + len(ids))) for term, ids in hits.items()}
     return hits, weights
 
@@ -150,7 +168,7 @@ def _size(items: list[dict]) -> int:
 
 
 def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap: int,
-                seen_chunks: set[int]) -> tuple[list[dict], list[dict], int]:
+                seen_chunks: set[int], scope: str = "all") -> tuple[list[dict], list[dict], int]:
     """Fragments one link away from the fragments actually being returned.
 
     Expanding the shown fragments rather than every bm25 hit is what stops a single
@@ -172,7 +190,7 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
         return [], skipped, 0
     marks = ",".join("?" for _ in scores)
     rows = con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body FROM chunks c
-        JOIN notes n ON n.id=c.note_id WHERE c.note_id IN ({marks}) ORDER BY n.path,c.ord""",
+        JOIN notes n ON n.id=c.note_id WHERE c.note_id IN ({marks}){_scope_where(scope)} ORDER BY n.path,c.ord""",
         tuple(scores)).fetchall()
     items, taken = [], set()
     for row in rows:
@@ -186,20 +204,14 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
                       "heading": row["heading_path"], "text": row["body"],
                       "score": round(scores[row["note_id"]], 6), "terms_matched": 0, "found_by": "link"})
     items.sort(key=lambda item: -item["score"])
-    return items, skipped, len(scores)
+    return items, skipped, len(scores) if scope == "all" else len({row["note_id"] for row in rows})
 
 
-def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DEFAULT_DB,
-           graph_share: float = 0.4) -> dict:
-    terms = parse_terms(query)
-    budget = max(0, budget)
-    if not terms:
-        return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
-                "dropped_by_budget": 0, "weak_match": False, "skipped_hubs": []}}
-    con = connect_ro(db_path)
-    con.row_factory = sqlite3.Row
-    terms = widen(con, terms)
-    hits, weights = term_weights(con, terms)
+def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], budget: int,
+                 hub_cap: int, graph_share: float, scope: str,
+                 extra_links: list[dict] | None = None) -> tuple[dict, list[tuple[int, float]], set[int]]:
+    terms = widen(con, parsed_terms, scope)
+    hits, weights = term_weights(con, terms, scope)
 
     # Rank by how much of the query a chunk actually covers, not by bm25 alone: bm25
     # rewards a short chunk holding one rare word over a long one holding several,
@@ -207,7 +219,8 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     mass: Counter[int] = Counter()
     matched_terms: Counter[int] = Counter()
     matched_content: Counter[int] = Counter()
-    total_chunks = con.execute("SELECT count(*) FROM chunks").fetchone()[0] or 1
+    total_chunks = con.execute("SELECT count(*) FROM chunks c JOIN notes n ON n.id=c.note_id "
+                               f"WHERE 1=1{_scope_where(scope)}").fetchone()[0] or 1
     common_above = max(total_chunks * COMMON_ABOVE, COMMON_FLOOR)
     content = [term for term in terms if len(hits[term]) <= common_above] or list(terms)
     # Only informative words move the ranking. A function word matches almost anywhere,
@@ -242,9 +255,13 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     # the vault knows, so no hits here means the vault holds nothing starting with even that.
     unmatched = [origin for term, origin in terms.items() if term in content and not hits[term]]
 
-    rows = con.execute("""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body,bm25(chunks_fts) AS rank
+    # One ranking for every scope; the scope only filters rows. A separate ranking for
+    # own/leads (word mass, then chunk length, no SQL limit) cost a hit@3 on the labelled
+    # questions and loaded every matching chunk into memory.
+    rows = con.execute(f"""SELECT c.id,c.note_id,n.path,n.type,n.kind,n.source,n.project,n.date,n.reviewed,n.dies_when,n.died,c.heading_path,c.body,bm25(chunks_fts) AS rank
         FROM chunks_fts JOIN chunks c ON c.id=chunks_fts.rowid JOIN notes n ON n.id=c.note_id
-        WHERE chunks_fts MATCH ? ORDER BY rank LIMIT ?""", (" OR ".join(content), POOL)).fetchall()
+        WHERE chunks_fts MATCH ?{_scope_where(scope)} ORDER BY rank LIMIT ?""",
+        (" OR ".join(content), POOL)).fetchall()
     text = [{"path": row["path"], "type": row["type"], "kind": row["kind"],
              "source": row["source"], "project": row["project"], "date": row["date"],
              "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
@@ -277,9 +294,17 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     for item in kept_text:
         if item["_note"] not in [note for note, _ in seeds]:
             seeds.append((item["_note"], item["score"]))
+    seen_chunks = {item["_id"] for item in text}
     links, skipped, neighbour_notes = ([], [], 0) if weak else _neighbours(
-        con, seeds, hub_cap, {item["_id"] for item in text})
-    con.close()
+        con, seeds, hub_cap, seen_chunks, scope)
+    if extra_links:
+        # Leads reached from an own note's link belong in the lead tail. Text matches
+        # still go first; a linked copy of the same lead note would be duplicate evidence.
+        # The same lead can be reached from a lead seed and from an own note: keep one,
+        # and keep the lane sorted, since apply_budget takes it strictly in order.
+        taken_paths = {item["path"] for item in text} | {item["path"] for item in links}
+        links.extend(item for item in extra_links if item["path"] not in taken_paths)
+        links.sort(key=lambda item: -item["score"])
 
     kept_links, _ = apply_budget(links, budget - _size(kept_text))
     if links and not kept_links:
@@ -289,8 +314,8 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     for item in kept:
         for private in ("_id", "_note", "_bm25"):
             item.pop(private, None)
-    return {"fragments": kept, "coverage": {
-        "matched_chunks": len(mass), "pool_examined": len(rows), "returned": len(kept),
+    result = {"fragments": kept, "coverage": {
+        "matched_chunks": len(mass), "pool_examined": len(text), "returned": len(kept),
         "returned_by_link": len(kept_links),
         "dropped_by_budget": len(text) + len(links) - len(kept),
         "query_terms": len(terms), "content_terms": len(content),
@@ -300,6 +325,75 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         "bytes_used": _size(kept), "budget_bytes": budget,
         "skipped_hubs": skipped, "expanded_notes": len(seeds) - len(skipped),
         "graph_neighbor_notes": neighbour_notes}}
+    return result, seeds, seen_chunks
+
+
+def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DEFAULT_DB,
+           graph_share: float = 0.4, scope: str = "own") -> dict:
+    if scope not in ("own", "leads", "all"):
+        raise ValueError(f"unknown search scope: {scope}")
+    parsed_terms = parse_terms(query)
+    budget = max(0, budget)
+    if not parsed_terms:
+        return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
+                "returned_leads": 0, "dropped_by_budget": 0, "weak_match": False,
+                "skipped_hubs": []}}
+    con = connect_ro(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        result, seeds, seen_chunks = _search_tier(
+            con, query, parsed_terms, budget, hub_cap, graph_share, scope)
+        if scope == "own":
+            # The 618-chunk catalog displaced own notes in 24/120 queries, including
+            # eight with no catalog result: it occupied the bm25 pool and changed word
+            # statistics before reranking. Each tier gets its own pool and statistics.
+            cross_links, _, _ = ([], [], 0) if result["coverage"]["weak_match"] else _neighbours(
+                con, seeds, hub_cap, seen_chunks, "leads")
+            lead, _, _ = _search_tier(con, query, parsed_terms, budget, hub_cap,
+                                      graph_share, "leads", cross_links)
+            own, own_cov = result["fragments"], result["coverage"]
+            if own_cov["dropped_by_budget"] and not own_cov["weak_match"]:
+                # The user asked for "own notes, plus a little of what I saved": a dense
+                # own answer used to leave the leads nothing (0 of 10 catalog hits on
+                # "self-hosted bookmarks"). Give the top leads room by dropping the
+                # weakest own fragments — never the first, never more than a share of
+                # the budget, so a small budget still opens with an own note.
+                matching = [f for f in lead["fragments"]
+                            if not lead["coverage"]["weak_match"] or f["found_by"] == "link"]
+                tail = matching[:LEAD_TAIL]
+                freed, allowance = 0, int(budget * LEAD_RESERVE_SHARE)
+                while tail and len(own) > 1 and _size(own) + _size(tail) > budget:
+                    size = len(own[-1]["text"].encode("utf-8"))
+                    if freed + size > allowance:
+                        break
+                    own.pop()
+                    freed += size
+                    own_cov["dropped_by_budget"] += 1
+                tail, _ = apply_budget(tail, budget - _size(own))
+            else:
+                # A thin or weak own answer lets leads fill whatever it left, so a
+                # question only leads can answer still gets one.
+                tail, _ = apply_budget(lead["fragments"], budget - _size(own))
+            result["fragments"] = own + tail
+            own_cov, lead_cov = result["coverage"], lead["coverage"]
+            own_cov["returned"] = len(result["fragments"])
+            own_cov["returned_leads"] = len(tail)
+            own_cov["matched_lead_chunks"] = lead_cov["matched_chunks"]
+            own_cov["pool_examined_leads"] = lead_cov["pool_examined"]
+            own_cov["tail_omitted"] = len(lead["fragments"]) - len(tail)
+            own_cov["returned_by_link"] = sum(item["found_by"] == "link" for item in result["fragments"])
+            own_cov["dropped_by_budget"] += lead_cov["dropped_by_budget"]
+            own_cov["bytes_used"] = _size(result["fragments"])
+            own_cov["budget_bytes"] = budget
+            own_cov["skipped_hubs"].extend(lead_cov["skipped_hubs"])
+            own_cov["expanded_notes"] += lead_cov["expanded_notes"]
+            own_cov["graph_neighbor_notes"] += lead_cov["graph_neighbor_notes"]
+        else:
+            result["coverage"]["returned_leads"] = sum(
+                item["type"] == "lead" for item in result["fragments"])
+        return result
+    finally:
+        con.close()
 
 
 def main() -> None:
@@ -308,6 +402,7 @@ def main() -> None:
     parser.add_argument("--budget", type=int, default=8000)
     parser.add_argument("--hub-cap", type=int, default=30)
     parser.add_argument("--graph-share", type=float, default=0.4)
+    parser.add_argument("--scope", choices=("own", "leads", "all"), default="own")
     parser.add_argument("--vault", type=Path, help="index this vault instead of the configured one")
     parser.add_argument("--db", type=Path, default=None, help="use this index file")
     parser.add_argument("--raw", type=str, default=None,
@@ -319,6 +414,9 @@ def main() -> None:
     query = args.query if args.query is not None else payload.get("query", "")
     budget = int(payload.get("budget", args.budget))
     hub_cap = int(payload.get("hub_cap", args.hub_cap))
+    scope = payload.get("scope", args.scope)
+    if scope not in ("own", "leads", "all"):
+        parser.error(f"scope must be own, leads or all, not {scope!r}")
     db_path = args.db or DEFAULT_DB
     index_error = refresh_index(args.vault, db_path)
     if index_error and not db_path.exists():
@@ -329,7 +427,7 @@ def main() -> None:
         # would be a raw sqlite traceback instead. Say which problem to fix.
         raise SystemExit(f"{index_error} The existing index was built by an older version "
                          "and cannot be searched until the refresh succeeds and rebuilds it.")
-    result = search(query, budget, hub_cap, db_path, args.graph_share)
+    result = search(query, budget, hub_cap, db_path, args.graph_share, scope)
     # Every fragment path is vault-relative, so without the root the reader cannot open
     # the note an excerpt was cut out of — and starts guessing where the vault lives.
     try:

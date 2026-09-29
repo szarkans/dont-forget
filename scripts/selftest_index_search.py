@@ -577,4 +577,113 @@ with tempfile.TemporaryDirectory() as tmp:
     assert plain["Missing"] is None, plain
     assert schema_stale(db) is False
 
+# A catalog of short lead fragments used to occupy the bm25 pool before any own
+# candidate could be reranked. Its words also changed the vault-wide term weights,
+# so even queries returning no catalog fragment could lose an own note.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    for n in range(5):
+        link = " [[Linked lead]]" if n == 0 else ""
+        (vault / f"own-{n}.md").write_text(
+            f"# Own {n}\n\nalpha beta onlyown{link}. " + "personal account of the work. " * 9)
+    base_db = home / "base.db"
+    build(vault, base_db)
+    with_db = home / "with.db"
+    search_script = Path(__file__).with_name("search.py")
+
+    def scoped(query: str | None, *extra: str, db: Path = with_db,
+               payload: dict | None = None) -> dict:
+        command = [sys.executable, str(search_script)]
+        if query is not None:
+            command.append(query)
+        command += ["--vault", str(vault), "--db", str(db), *extra]
+        done = subprocess.run(command, input=json.dumps(payload) if payload else None,
+                              capture_output=True, text=True, check=True)
+        return json.loads(done.stdout)
+
+    base = scoped("alpha beta", db=base_db)
+    (vault / "catalog.md").write_text(
+        "---\ntype: lead\n---\n\n" +
+        "\n\n".join(f"## Tip {n}\n\nalpha beta onlyleads tip {n}." for n in range(530)))
+    (vault / "Linked lead.md").write_text(
+        "---\ntype: lead\n---\n\n# Linked lead\n\nAn untried source without the query word.\n")
+    build(vault, with_db)
+    mixed = scoped("alpha beta")
+    own_paths = [f["path"] for f in mixed["fragments"] if f["type"] != "lead"]
+    assert own_paths == [f["path"] for f in base["fragments"]], own_paths
+    assert mixed["fragments"][:5] == base["fragments"], mixed["fragments"][:5]
+    assert mixed["coverage"]["matched_chunks"] == base["coverage"]["matched_chunks"]
+    assert mixed["coverage"]["pool_examined"] == base["coverage"]["pool_examined"]
+    assert mixed["coverage"]["matched_lead_chunks"] >= 530, mixed["coverage"]
+
+    own_sizes = [len(f["text"].encode()) for f in base["fragments"]]
+    budget = own_sizes[0] + own_sizes[1] + 120
+    assert own_sizes[2] > 120, own_sizes
+    dense = scoped("alpha beta", "--budget", str(budget))
+    assert dense["coverage"]["dropped_by_budget"] > 0, dense["coverage"]
+    assert 0 < dense["coverage"]["returned_leads"] <= 2, dense["coverage"]
+    assert all(f["type"] != "lead" for f in dense["fragments"][:2]), dense["fragments"]
+    assert dense["coverage"]["bytes_used"] <= budget, dense["coverage"]
+    fuller_budget = sum(own_sizes[:4]) + 120
+    fuller = scoped("alpha beta", "--budget", str(fuller_budget))
+    assert fuller["coverage"]["dropped_by_budget"] > 0, fuller["coverage"]
+    # A dense own answer still gets its short tail of leads, never more than two.
+    assert 0 < fuller["coverage"]["returned_leads"] <= 2, fuller["coverage"]
+    assert fuller["coverage"]["bytes_used"] <= fuller_budget, fuller["coverage"]
+    assert fuller["coverage"]["budget_bytes"] == fuller_budget, fuller["coverage"]
+
+    # With no own match, the full budget is available to leads, but the own-tier
+    # absence stays visible in weak_match and unmatched_terms.
+    only_leads = scoped("onlyleads", "--budget", "500")
+    assert only_leads["coverage"]["returned_leads"] > 2, only_leads["coverage"]
+    assert only_leads["coverage"]["weak_match"] is True, only_leads["coverage"]
+    assert only_leads["coverage"]["unmatched_terms"] == ["onlyleads"], only_leads["coverage"]
+    assert all(f["type"] == "lead" for f in only_leads["fragments"]), only_leads["fragments"]
+
+    leads = scoped("alpha beta", "--scope", "leads", "--budget", "500")
+    assert leads["fragments"] and all(f["type"] == "lead" for f in leads["fragments"])
+    assert leads["coverage"]["matched_chunks"] >= 530, leads["coverage"]
+
+    # The lead reserve is a share of the budget: on a budget that fits one own
+    # fragment, the own fragment still comes first instead of leads only.
+    small = scoped("alpha beta", "--budget", str(own_sizes[0] + 60))
+    assert small["fragments"] and small["fragments"][0]["type"] != "lead", small["fragments"]
+
+    # "type: Lead" is a lead too: the digest already reads the field case-insensitively.
+    (vault / "Cased lead.md").write_text("---\ntype: Lead\n---\n\ncasedlead tip.\n")
+    build(vault, with_db)
+    cased = scoped("casedlead", "--scope", "leads")
+    assert [f["path"] for f in cased["fragments"]] == ["Cased lead.md"], cased["fragments"]
+    payload_leads = scoped(None, payload={"query": "onlyleads", "scope": "leads", "budget": 500})
+    assert payload_leads["fragments"] and all(f["type"] == "lead" for f in payload_leads["fragments"])
+
+    linked = scoped("onlyown")
+    assert any(f["path"] == "Linked lead.md" and f["found_by"] == "link"
+               for f in linked["fragments"]), linked
+    assert linked["coverage"]["returned_leads"] >= 1, linked["coverage"]
+
+# --scope all keeps the old flat ranking, including the short leads before the long
+# own chunks. This order and its coverage were recorded with the previous search.py.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    (vault / "own-a.md").write_text("# Own A\n\nalpha beta. " + "Long account of the work. " * 20 + "\n")
+    (vault / "own-b.md").write_text("# Own B\n\nalpha beta. " + "Another account of the work. " * 20 + "\n")
+    for name in ("lead-a", "lead-b"):
+        (vault / f"{name}.md").write_text(
+            f"---\ntype: lead\n---\n\n# {name.title().replace('-', ' ')}\n\nalpha beta.\n")
+    done = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "alpha beta",
+         "--scope", "all", "--vault", str(vault), "--db", str(home / "all.db")],
+        capture_output=True, text=True, check=True)
+    flat = json.loads(done.stdout)
+    assert [f["path"] for f in flat["fragments"]] == [
+        "lead-a.md", "lead-b.md", "own-a.md", "own-b.md"], flat["fragments"]
+    assert flat["coverage"]["matched_chunks"] == 4, flat["coverage"]
+    assert flat["coverage"]["pool_examined"] == 4, flat["coverage"]
+    assert flat["coverage"]["best_mass_share"] == 1.0, flat["coverage"]
+
 print("ok")
