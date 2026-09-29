@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 — 2026-09-29
 
 ### Changed
 - Search ranks the user's own notes as if saved, untried notes (`type: lead`) were not in
