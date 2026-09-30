@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.15.0 — 2026-09-30
+
+### Added
+- Search by meaning next to search by words. Each query is also matched against local
+  Granite embeddings (`ibm-granite/granite-embedding-311m-multilingual-r2`, pinned
+  revision, CPU), and the two rankings are merged. A note phrased differently from the
+  question is now found: 8 of 12 paraphrased questions against 4 of 12 before, with
+  exact terms and real past queries unchanged.
+  - Why: word search cannot link "call recap" to a note about transcription, and four
+    proven misses had piled up.
+- `setup.py --install-semantic` creates the plugin's own venv, installs the model's
+  dependencies and downloads the model. `index.py --embed` fills the vectors; the first
+  pass takes about an hour on a CPU and later passes only embed changed notes.
+  - Why: the hooks keep running on plain `python3`; the heavy parts live apart.
+
+### Changed
+- Search waits for the model: about 15 seconds per call.
+  - Why: the model is loaded per search; keeping it warm is left until the wait bothers.
+- Writing a note still checks duplicates by words only.
+  - Why: two model loads on every save cost ~30 seconds for no measured gain.
+- Without the venv or the model, search works by words exactly as before and says why.
+
 ## 0.14.0 — 2026-09-29
 
 ### Changed
