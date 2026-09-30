@@ -394,6 +394,11 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
     if not parsed_terms:
         return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
                 "returned_leads": 0, "dropped_by_budget": 0, "weak_match": False,
+                "semantic": "off: empty query" if semantic else "off: word-only",
+                "semantic_pool_examined": 0, "semantic_best_cosine": 0,
+                "semantic_embedded_chunks": 0, "semantic_total_chunks": 0,
+                "returned_by_meaning": 0,
+                **({"semantic_pool_examined_leads": 0} if scope == "own" else {}),
                 "skipped_hubs": []}}
     semantic_result = semantic_run(db_path, query) if semantic else {"semantic": "off: word-only"}
     con = connect_ro(db_path)
@@ -433,9 +438,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             else:
                 # A thin or weak own answer lets leads fill whatever it left, so a
                 # question only leads can answer still gets one.
-                lead_candidates = [f for f in lead["fragments"]
-                                   if lead_supported or f["found_by"] == "link"]
-                tail, _ = apply_budget(lead_candidates, budget - _size(own))
+                tail, _ = apply_budget(lead["fragments"], budget - _size(own))
             result["fragments"] = own + tail
             own_cov, lead_cov = result["coverage"], lead["coverage"]
             own_cov["returned"] = len(result["fragments"])

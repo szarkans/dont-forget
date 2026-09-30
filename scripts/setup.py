@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from pathlib import Path
 from common import (CONFIG_PATH, DEFAULT_DB, HOME_DIR, NotConfigured, known_vaults,
                     scan_for_vaults, vault_from_config)
 from index import build
+from semantic import MODEL_ID, MODEL_REVISION
 
 # Counting every note on a slow network mount is not worth the wait: the number is only
 # here so the user recognises which folder is theirs.
@@ -89,6 +91,12 @@ def install_semantic() -> dict:
     if platform.system() == "Linux":
         sentence_command.append("--torch-backend=cpu")
     subprocess.run(sentence_command, check=True)
+    download_env = os.environ.copy()
+    download_env.pop("HF_HUB_OFFLINE", None)
+    subprocess.run([str(python), "-c",
+                    "from huggingface_hub import snapshot_download; "
+                    f"snapshot_download({MODEL_ID!r}, revision={MODEL_REVISION!r})"],
+                   env=download_env, check=True)
     return {"semantic": "installed", "venv": str(venv)}
 
 
@@ -97,7 +105,7 @@ def main() -> None:
     parser.add_argument("--detect", action="store_true", help="report the current config and every vault found")
     parser.add_argument("--set", dest="vault", help="use this vault, write the config, build the index")
     parser.add_argument("--install-semantic", action="store_true",
-                        help="create the plugin venv and install CPU embedding dependencies")
+                        help="create the plugin venv, install CPU dependencies and cache pinned Granite")
     args = parser.parse_args()
     if args.install_semantic and (args.detect or args.vault):
         parser.error("--install-semantic must be run separately from --set/--detect")

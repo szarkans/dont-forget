@@ -149,8 +149,9 @@ counts candidates admitted to result selection; when it is smaller than
 
 `weak_match: true` is the most important field. By default it means the user's own notes
 cannot answer this: their closest chunk covers too little of what the question is about.
-It is false when either text coverage or a returned fragment's cosine exceeds the semantic floor;
-read that hit before concluding it answers the question.
+For the default scope it is false when the own-note answer has sufficient text coverage
+or a returned own-note fragment's cosine exceeds the semantic floor; leads in the tail
+do not clear it. Read that hit before concluding it answers the question.
 Any returned leads are untried possibilities, not the user's answer. Say that first, before
 anything else. Then you may show what came closest, clearly labelled as such. Never
 synthesise a confident answer over a weak match, and never let a weak match produce a

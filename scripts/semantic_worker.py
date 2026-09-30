@@ -60,7 +60,8 @@ class ModelEncoder:
             self.model.max_seq_length = 512
             self.np = np
         except Exception as error:
-            raise SystemExit(f"model unavailable: {type(error).__name__}: {error}") from None
+            raise SystemExit("model unavailable: run scripts/setup.py --install-semantic "
+                             f"({type(error).__name__})") from None
 
     def encode_documents(self, texts):
         return self.model.encode_document(texts, batch_size=16, normalize_embeddings=True,
@@ -87,10 +88,10 @@ def execute(request: dict, encoder=None) -> dict:
     started = time.perf_counter()
     try:
         index = connect_ro(Path(request["db"]))
-    except sqlite3.Error:
+    except sqlite3.Error as error:
         if not Path(request["db"]).is_file():
             return {"semantic": "off: no index"}
-        raise
+        return {"semantic": f"off: sqlite: {str(error).splitlines()[0][:100]}"}
     vectors = None
     try:
         vectors = sqlite3.connect(request["vectors_db"], timeout=30)
@@ -149,6 +150,8 @@ def execute(request: dict, encoder=None) -> dict:
             # Scope belongs to search.py; keep all ranks so each scope gets its pool.
             result["rankings"] = scored
         return result
+    except sqlite3.Error as error:
+        return {"semantic": f"off: sqlite: {str(error).splitlines()[0][:100]}"}
     finally:
         if vectors is not None:
             vectors.close()

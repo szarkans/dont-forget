@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import glob
 import json
 import os
 import subprocess
@@ -20,7 +21,7 @@ VECTOR_SUFFIX = f"vectors-{MODEL_ID.rsplit('/', 1)[-1]}-{MODEL_REVISION[:12]}.db
 
 
 def vector_db_path(db_path: Path) -> Path:
-    return db_path.with_name(f"{db_path.stem}.{VECTOR_SUFFIX}")
+    return db_path.with_name(f"{db_path.name}.{VECTOR_SUFFIX}")
 
 
 def stub_enabled() -> bool:
@@ -33,26 +34,27 @@ def stub_enabled() -> bool:
 
 def run(db_path: Path, query: str | None = None, full: bool = False) -> dict:
     """Return ranked chunk IDs, or a short reason why semantic search is off."""
-    old_files = sorted(path.name for path in db_path.parent.glob(f"{db_path.stem}.vectors-*.db")
-                       if path != vector_db_path(db_path))
+    old_files = []
 
     def finish(result: dict) -> dict:
         if old_files:
             result["old_vector_files"] = old_files
         return result
 
-    if not db_path.is_file():
-        return finish({"semantic": "off: no index"})
-    stub = stub_enabled()
-    python = Path(sys.executable) if stub else VENV_PYTHON
-    if not python.is_file():
-        return finish({"semantic": "off: no venv"})
-    if not WORKER.is_file():
-        return finish({"semantic": "off: no worker"})
-    request = {"db": str(db_path), "vectors_db": str(vector_db_path(db_path)),
-               "query": query, "full": full,
-               "limit": SEARCH_EMBED_LIMIT}
     try:
+        old_files = sorted(path.name for path in db_path.parent.glob(
+            f"{glob.escape(db_path.name)}.vectors-*.db") if path != vector_db_path(db_path))
+        if not db_path.is_file():
+            return finish({"semantic": "off: no index"})
+        stub = stub_enabled()
+        python = Path(sys.executable) if stub else VENV_PYTHON
+        if not python.is_file():
+            return finish({"semantic": "off: no venv"})
+        if not WORKER.is_file():
+            return finish({"semantic": "off: no worker"})
+        request = {"db": str(db_path), "vectors_db": str(vector_db_path(db_path)),
+                   "query": query, "full": full,
+                   "limit": SEARCH_EMBED_LIMIT}
         done = subprocess.run([str(python), str(WORKER)], input=json.dumps(request),
                               text=True, capture_output=True, timeout=None if full else 90)
         if done.returncode:

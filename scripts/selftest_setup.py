@@ -9,7 +9,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 SCRIPT = Path(__file__).with_name("setup.py")
 sys.path.insert(0, str(Path(__file__).parent))
@@ -122,12 +123,20 @@ with tempfile.TemporaryDirectory() as tmp:
 # Installation uses uv and a CPU torch wheel, but this test never installs packages.
 with tempfile.TemporaryDirectory() as tmp:
     with patch.object(setup, "HOME_DIR", Path(tmp)), patch.object(setup.subprocess, "run") as calls, \
-            patch.object(setup.platform, "system", return_value="Linux"):
+            patch.object(setup.platform, "system", return_value="Linux"), \
+            patch.dict(os.environ, {"HF_HUB_OFFLINE": "1"}):
         installed = setup.install_semantic()
     commands = [call.args[0] for call in calls.call_args_list]
     assert commands[0] == ["uv", "venv", "--python", "3.12", str(Path(tmp) / "venv")], commands
     assert "https://download.pytorch.org/whl/cpu" in commands[1], commands
     assert "sentence-transformers" in commands[2] and "--torch-backend=cpu" in commands[2], commands
+    assert commands[3][:2] == [str(Path(tmp) / "venv" / "bin" / "python"), "-c"], commands
+    assert "HF_HUB_OFFLINE" not in calls.call_args_list[3].kwargs["env"]
+    # Execute the actual installer snippet against a stub Hub, without network.
+    download = Mock()
+    with patch.dict(sys.modules, {"huggingface_hub": SimpleNamespace(snapshot_download=download)}):
+        exec(commands[3][2])
+    download.assert_called_once_with(setup.MODEL_ID, revision=setup.MODEL_REVISION)
     assert installed["semantic"] == "installed", installed
 
 print("ok")

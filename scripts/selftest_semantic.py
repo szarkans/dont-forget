@@ -69,7 +69,8 @@ with tempfile.TemporaryDirectory() as temp:
     vectors_db = semantic.vector_db_path(db)
     assert vectors_db.parent == db.parent
     assert semantic.MODEL_REVISION[:12] in vectors_db.name
-    assert vectors_db.name.startswith("index.vectors-")
+    assert vectors_db.name.startswith("index.db.vectors-")
+    assert semantic.vector_db_path(root / "index.sqlite") != vectors_db
     with sqlite3.connect(vectors_db) as con:
         before = con.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0]
     unchanged = run(INDEX, home, vault, db, "--embed")
@@ -95,9 +96,29 @@ with tempfile.TemporaryDirectory() as temp:
     assert [item["path"] for item in lead["fragments"]] == ["lead.md"], lead
     own = run(SCRIPT, home, vault, db, "bird crisp", "--scope", "own")
     assert own["fragments"][0]["path"] == "answer.md", own
-    (root / "index.vectors-retired.db").touch()
+    (root / "index.db.vectors-retired.db").touch()
     old = run(SCRIPT, home, vault, db, "bird crisp")
-    assert old["coverage"]["semantic_old_vector_files"] == ["index.vectors-retired.db"], old
+    assert old["coverage"]["semantic_old_vector_files"] == ["index.db.vectors-retired.db"], old
+
+    # An index name containing glob metacharacters only lists its own old caches.
+    bracket_db = root / "index[1].db"
+    bracket_db.write_bytes(db.read_bytes())
+    (root / "index[1].db.vectors-retired.db").touch()
+    bracket = run(SCRIPT, home, vault, bracket_db, "bird crisp")
+    assert bracket["coverage"]["semantic_old_vector_files"] == ["index[1].db.vectors-retired.db"], bracket
+    with patch.object(Path, "glob", side_effect=OSError("cannot list cache")):
+        unavailable = search.search("птица", db_path=db)
+    assert unavailable["coverage"]["semantic"] == "off: OSError", unavailable
+    assert unavailable["fragments"], unavailable
+
+    semantic_keys = {key for key in first["coverage"] if key.startswith("semantic")}
+    semantic_keys.add("returned_by_meaning")
+    for query in ("", "... !?"):
+        with patch.object(search, "semantic_run", side_effect=AssertionError("empty query started worker")):
+            empty = search.search(query, db_path=db)
+        assert semantic_keys <= empty["coverage"].keys(), empty
+        assert empty["coverage"]["semantic"] == "off: empty query", empty
+        assert empty["coverage"]["returned_by_meaning"] == 0, empty
 
     answer_id = sqlite3.connect(db).execute(
         "SELECT c.id FROM chunks c JOIN notes n ON n.id=c.note_id WHERE n.path='answer.md'").fetchone()[0]
@@ -105,7 +126,6 @@ with tempfile.TemporaryDirectory() as temp:
     with patch.object(search, "semantic_run", return_value=injected):
         tiny = search.search("bird crisp", budget=1, db_path=db)
         assert tiny["fragments"] == [] and tiny["coverage"]["weak_match"], tiny
-        assert "_weak_without_semantic" not in tiny["coverage"], tiny
         roomy = search.search("bird crisp", db_path=db)
         assert not roomy["coverage"]["weak_match"], roomy
         assert roomy["coverage"]["returned_by_meaning"] >= 1, roomy
@@ -135,6 +155,13 @@ with tempfile.TemporaryDirectory() as temp:
     other_db = root / "other.db"
     run(INDEX, home, other_vault, other_db, "--embed")
     assert semantic.vector_db_path(other_db) != vectors_db
+    with sqlite3.connect(vectors_db) as con:
+        assert con.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0] == old_count
+
+    # Same-stem indexes with different extensions must not share or prune vectors.
+    sqlite_db = root / "index.sqlite"
+    run(INDEX, home, other_vault, sqlite_db, "--embed")
+    assert semantic.vector_db_path(sqlite_db).is_file()
     with sqlite3.connect(vectors_db) as con:
         assert con.execute("SELECT count(*) FROM chunk_vectors").fetchone()[0] == old_count
 
@@ -263,11 +290,10 @@ with tempfile.TemporaryDirectory() as temp:
                                         "WHERE n.path LIKE 'own%'")]
     injected = {"semantic": "ready", "rankings": [[i, 0.95] for i in ids]}
     with patch.object(search, "semantic_run", return_value=injected):
-        for budget in (250, 8000):
-            result = search.search("bird alpha gamma delta epsilon", budget=budget, db_path=db)
-            leads = [f for f in result["fragments"] if f["type"].strip().lower() == "lead"]
-            assert all(f["found_by"] == "link" for f in leads), result
-            assert all(f["path"] != "weak-lead.md" for f in result["fragments"]), result
+        result = search.search("bird alpha gamma delta epsilon", budget=250, db_path=db)
+        leads = [f for f in result["fragments"] if f["type"].strip().lower() == "lead"]
+        assert all(f["found_by"] == "link" for f in leads), result
+        assert all(f["path"] != "weak-lead.md" for f in result["fragments"]), result
         roomy = search.search("bird alpha gamma delta epsilon", db_path=db)
         assert any(f["path"] == "linked.md" for f in roomy["fragments"]), roomy
 
@@ -278,6 +304,20 @@ with tempfile.TemporaryDirectory() as temp:
                                       "query": None, "full": False, "limit": 8})
     assert result["semantic"] == "off: no index", result
     assert not missing.exists() and not missing_vectors.exists()
+
+    # SQLite failures are controlled worker results, including in subprocesses.
+    broken_index = root / "no-chunks.db"
+    broken_index.touch()
+    bad_request = {"db": str(broken_index), "vectors_db": str(root / "broken.vectors.db"),
+                   "query": None, "full": False, "limit": 8}
+    result = semantic_worker.execute(bad_request, semantic_worker.StubEncoder())
+    assert result["semantic"] == "off: sqlite: no such table: chunks", result
+    Path(bad_request["vectors_db"]).write_bytes(b"not sqlite")
+    bad_request["db"] = str(db)
+    failed = subprocess.run([sys.executable, str(semantic.WORKER)], input=json.dumps(bad_request),
+                            text=True, capture_output=True)
+    assert failed.returncode == 0 and not failed.stderr, failed
+    assert json.loads(failed.stdout)["semantic"].startswith("off: sqlite:"), failed.stdout
 
     # A stub switch alone cannot replace a real model in a user's home.
     with patch.dict(os.environ, {"DONT_FORGET_EMBED_STUB": "1"}, clear=True):
@@ -300,6 +340,24 @@ with patch.dict(os.environ, {"HF_HUB_OFFLINE": "0"}), patch.dict(sys.modules, {
         "torch": SimpleNamespace(set_num_threads=lambda n: None, float32="float32"),
         "sentence_transformers": SimpleNamespace(SentenceTransformer=fake_model)}):
     assert semantic_worker.ModelEncoder().model.max_seq_length == 512
+
+with patch.dict(sys.modules, {"numpy": None}):
+    try:
+        semantic_worker.ModelEncoder()
+        raise AssertionError("missing model dependencies should fail")
+    except SystemExit as error:
+        assert "setup.py --install-semantic" in str(error), str(error)
+
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp)
+    vault, db = root / "vault", root / "index.db"
+    vault.mkdir()
+    (vault / "own.md").write_text("# Own\nalpha")
+    (vault / "lead.md").write_text("---\ntype: lead\n---\n# Lead\nalpha")
+    build(vault, db)
+    weak = search.search("alpha beta gamma delta epsilon", db_path=db, semantic=False)
+    assert weak["coverage"]["weak_match"], weak
+    assert any(f["path"] == "lead.md" and f["found_by"] == "text" for f in weak["fragments"]), weak
 
 with tempfile.TemporaryDirectory() as temp:
     root = Path(temp)
