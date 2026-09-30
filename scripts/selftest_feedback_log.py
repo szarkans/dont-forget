@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Dependency-free self-check for feedback-log.py."""
 
+import _selftest_env  # noqa: F401
+
 import json
 import subprocess
 import tempfile

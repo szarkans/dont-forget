@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Dependency-free self-check for audit.py."""
 
+import _selftest_env  # noqa: F401
+
 import subprocess
 import sys
 import tempfile

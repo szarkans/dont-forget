@@ -8,6 +8,8 @@ transcript, and assert on what it prints.
 
 from __future__ import annotations
 
+import _selftest_env  # noqa: F401
+
 import importlib
 import json
 import os

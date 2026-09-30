@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import _selftest_env  # noqa: F401
 from index import _split_large, build, extract_links, parse_frontmatter, schema_stale
 from common import connect_ro
 from search import apply_budget, fts_query, widen
@@ -81,7 +82,7 @@ with tempfile.TemporaryDirectory() as tmp:
     config_dir.mkdir()
     (config_dir / "config.json").write_text(json.dumps({"vault": str(vault)}))
     env = os.environ.copy()
-    env["HOME"] = str(home)
+    env["DONT_FORGET_HOME"] = str(config_dir)
     search_script = Path(__file__).with_name("search.py")
     first = subprocess.run(
         [sys.executable, str(search_script), "freshnessalpha"],
@@ -553,8 +554,7 @@ with tempfile.TemporaryDirectory() as tmp:
     (crash_home / ".dont-forget" / "config.json").write_text(
         json.dumps({"vault": str(home / "gone")}))
     crash_env = os.environ.copy()
-    crash_env["HOME"] = str(crash_home)
-    crash_env.pop("DONT_FORGET_HOME", None)
+    crash_env["DONT_FORGET_HOME"] = str(crash_home / ".dont-forget")
     refused = subprocess.run(
         [sys.executable, str(Path(__file__).with_name("search.py")), "widget"],
         env=crash_env, capture_output=True, text=True,

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Assert-based self-test for hot-scan.py."""
 
+import _selftest_env  # noqa: F401
+
 import json
 import runpy
 import sqlite3

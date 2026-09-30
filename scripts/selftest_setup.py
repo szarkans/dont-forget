@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Dependency-free self-check for vault discovery, config reading and setup.py."""
 
+import _selftest_env  # noqa: F401
+
 import json
 import os
 import subprocess
@@ -12,6 +14,7 @@ from unittest.mock import patch
 SCRIPT = Path(__file__).with_name("setup.py")
 sys.path.insert(0, str(Path(__file__).parent))
 import common  # noqa: E402
+import setup  # noqa: E402
 
 # Windows paths from a registry written on the Windows side of WSL.
 assert common._from_windows(r"C:\Users\a\Vault") == "/mnt/c/Users/a/Vault"
@@ -91,7 +94,9 @@ with tempfile.TemporaryDirectory() as tmp:
     vault.mkdir()
     (vault / "Note.md").write_text("---\ntype: atom\n---\n# Note\n\nbody text\n", encoding="utf-8")
 
-    detected = run(home, "--detect")
+    with patch.object(setup, "known_vaults", return_value=[]), \
+            patch.object(setup, "scan_for_vaults", return_value=[]):
+        detected = setup.detect()
     assert detected["configured"] is None and "not set up" in detected["problem"]
 
     # --set writes the config and builds the index in the same step.
@@ -111,9 +116,10 @@ with tempfile.TemporaryDirectory() as tmp:
 
     assert "not a directory" in run(home, "--set", str(root / "nope"), expect_ok=False)
     assert "--detect or --set" in run(home, expect_ok=False)
+    for flags in (("--detect",), ("--set", str(vault))):
+        assert "must be run separately" in run(home, "--install-semantic", *flags, expect_ok=False)
 
 # Installation uses uv and a CPU torch wheel, but this test never installs packages.
-import setup  # noqa: E402
 with tempfile.TemporaryDirectory() as tmp:
     with patch.object(setup, "HOME_DIR", Path(tmp)), patch.object(setup.subprocess, "run") as calls, \
             patch.object(setup.platform, "system", return_value="Linux"):

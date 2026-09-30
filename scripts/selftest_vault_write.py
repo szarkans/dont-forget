@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Dependency-free self-check for vault-write.py."""
 
+import _selftest_env  # noqa: F401
+
 import json
 import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -212,6 +215,27 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-test-") as directory:
     )
     assert quiet.returncode == 0, quiet.stderr
     assert json.loads(quiet.stdout) == {"status": "created"}, quiet.stdout
+
+with tempfile.TemporaryDirectory(prefix="dont-forget-word-write-") as tmp:
+    root = Path(tmp)
+    vault, home = root / "vault", root / "home"
+    vault.mkdir()
+    # A usable interpreter trap makes any attempted model subprocess observable.
+    marker = root / "model-started"
+    python = home / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n")
+    python.chmod(0o755)
+    (vault / "Existing.md").write_text("---\ntype: atom\n---\nптица хруст [[hub]]")
+    payload = {"filename": "Atom — Fresh claim.md",
+               "content": "---\ntype: atom\n---\nA new database claim. [[hub]]"}
+    done = subprocess.run([sys.executable, str(SCRIPT), "--vault", str(vault),
+                           "--db", str(home / "index.db")], input=json.dumps(payload),
+                          capture_output=True, text=True,
+                          env={**os.environ, "DONT_FORGET_HOME": str(home)}, check=True)
+    assert json.loads(done.stdout)["status"] == "created", done.stdout
+    assert at(vault, payload["filename"]).is_file()
+    assert not marker.exists(), "vault-write started the model"
 
 print("ok")
 

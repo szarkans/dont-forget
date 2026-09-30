@@ -99,6 +99,8 @@ def main() -> None:
     parser.add_argument("--install-semantic", action="store_true",
                         help="create the plugin venv and install CPU embedding dependencies")
     args = parser.parse_args()
+    if args.install_semantic and (args.detect or args.vault):
+        parser.error("--install-semantic must be run separately from --set/--detect")
     if not args.detect and not args.vault and not args.install_semantic:
         parser.error("pass --detect or --set <path> or --install-semantic")
     try:

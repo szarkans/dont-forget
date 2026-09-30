@@ -160,7 +160,7 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
         # the first fragment that does not fit — so a small budget here returned nothing
         # and let the duplicate through.
         # A duplicate of a saved lead is still a duplicate: search every note, not just own.
-        result = search(query, budget=4000, db_path=db_path, scope="all")
+        result = search(query, budget=4000, db_path=db_path, scope="all", semantic=False)
     except Exception:
         # Dedup is a courtesy, not a gate: a broken index must not stop a note being
         # written. The write is the thing the user asked for.

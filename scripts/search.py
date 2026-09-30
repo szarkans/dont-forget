@@ -49,8 +49,7 @@ MIN_STEM = 3
 # is caught until 0.6 while the false refusals climb 2, 4, 5, 8. So 0.4 buys the last
 # refusal that is free.
 WEAK_COVERAGE = 0.4
-# STRONG_COSINE, COSINE_FLOOR, and RRF constants are bound to Granite R2 and set on 34 queries.
-STRONG_COSINE = 0.85
+# COSINE_FLOOR and RRF constants are bound to Granite R2 and set on 34 queries.
 COSINE_FLOOR = 0.90
 RRF_K = 10
 RRF_MEANING_WEIGHT = 1.2
@@ -174,8 +173,13 @@ def _size(items: list[dict]) -> int:
     return sum(len(item["text"].encode("utf-8")) for item in items)
 
 
+def _supports_answer(text_supported: bool, fragments: list[dict]) -> bool:
+    return text_supported or any(item.get("cosine", 0) > COSINE_FLOOR for item in fragments)
+
+
 def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap: int,
-                seen_chunks: set[int], scope: str = "all") -> tuple[list[dict], list[dict], int]:
+                seen_chunks: set[int], scope: str = "all",
+                cosines: dict[int, float] | None = None) -> tuple[list[dict], list[dict], int]:
     """Fragments one link away from the fragments actually being returned.
 
     Expanding the shown fragments rather than every bm25 hit is what stops a single
@@ -210,6 +214,8 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
                       "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
                       "heading": row["heading_path"], "text": row["body"],
                       "score": round(scores[row["note_id"]], 6), "terms_matched": 0, "found_by": "link"})
+        if row["id"] in (cosines or {}):
+            items[-1]["cosine"] = cosines[row["id"]]
     items.sort(key=lambda item: -item["score"])
     return items, skipped, len(scores) if scope == "all" else len({row["note_id"] for row in rows})
 
@@ -217,7 +223,7 @@ def _neighbours(con: sqlite3.Connection, seeds: list[tuple[int, float]], hub_cap
 def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], budget: int,
                  hub_cap: int, graph_share: float, scope: str,
                  extra_links: list[dict] | None = None,
-                 semantic: dict | None = None) -> tuple[dict, list[tuple[int, float]], set[int]]:
+                 semantic: dict | None = None) -> tuple[dict, list[tuple[int, float]], set[int], bool]:
     terms = widen(con, parsed_terms, scope)
     hits, weights = term_weights(con, terms, scope)
 
@@ -251,7 +257,7 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
     query_mass = sum(weights[term] for term in content)
     best_mass = max(mass.values(), default=0.0)
     mass_share = best_mass / query_mass if query_mass else 0.0
-    weak = mass_share < WEAK_COVERAGE
+    text_supported = mass_share >= WEAK_COVERAGE
     # A word the vault does not contain at all stays invisible to the share, because the
     # words it does own carry the best chunk past the threshold by themselves. Naming the
     # word is enough: given only the numbers, three agent runs out of three answered a
@@ -279,10 +285,16 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
             for row in rows]
     text.sort(key=lambda item: (-item["score"], item["_bm25"]))
     text_count = len(text)
-    semantic_ranks = [(chunk_id, score) for chunk_id, score in
-                      (semantic or {}).get("rankings", {}).get(scope, [])
-                      if score > COSINE_FLOOR]
-    semantic_scores = {chunk_id: score for chunk_id, score in semantic_ranks}
+    scope_ids = {row[0] for row in con.execute(
+        "SELECT c.id FROM chunks c JOIN notes n ON n.id=c.note_id "
+        f"WHERE 1=1{_scope_where(scope)}")}
+    semantic_scores = {chunk_id: score for chunk_id, score in (semantic or {}).get("rankings", [])
+                       if chunk_id in scope_ids}
+    semantic_ranks = [(chunk_id, score) for chunk_id, score in semantic_scores.items()
+                      if score > COSINE_FLOOR][:POOL]
+    for item in text:
+        if item["_id"] in semantic_scores:
+            item["cosine"] = semantic_scores[item["_id"]]
     if semantic_ranks:
         by_id = {item["_id"]: item for item in text}
         ids = [chunk_id for chunk_id, _ in semantic_ranks if chunk_id not in by_id]
@@ -294,7 +306,8 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
                     "source": row["source"], "project": row["project"], "date": row["date"],
                     "reviewed": row["reviewed"], "dies_when": row["dies_when"], "died": row["died"],
                     "heading": row["heading_path"], "text": row["body"],
-                    "score": semantic_scores[row["id"]], "terms_matched": 0, "found_by": "meaning",
+                    "score": semantic_scores[row["id"]], "cosine": semantic_scores[row["id"]],
+                    "terms_matched": 0, "found_by": "meaning",
                     "_id": row["id"], "_note": row["note_id"], "_bm25": 0}
         lexical_ranks = {item["_id"]: rank for rank, item in enumerate(text, 1)}
         meaning_ranks = {chunk_id: rank for rank, (chunk_id, _) in enumerate(semantic_ranks, 1)}
@@ -318,11 +331,10 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
     # Whole ids on both sides, never substrings: "BTS-22" is not "BTS-226", and "12"
     # is in every date. "PR #498", "PR 498" and "PR-498" are one id.
     ids = {_ticket_key(m) for m in TICKET.findall(query)}
-    if weak and ids and any(_ticket_key(m) in ids for item in text[:3]
+    if ids and any(_ticket_key(m) in ids for item in text[:3]
                             for m in TICKET.findall(item["path"])):
-        weak = False
-    weak_without_semantic = weak
-    best_cosine = (semantic or {}).get("best_cosine", {}).get(scope)
+        text_supported = True
+    best_cosine = max(semantic_scores.values(), default=None)
 
     # Text fills first, then neighbours take the remainder. Only if neighbours exist
     # and got nothing does the text tail give up the reserved slice — that is the
@@ -331,14 +343,12 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
     # fragment that is the actual answer.
     kept_text, _ = apply_budget(text, budget)
     seeds: list[tuple[int, float]] = []
-    for item in kept_text:
+    for rank, item in enumerate(kept_text, 1):
         if item["_note"] not in [note for note, _ in seeds]:
-            seeds.append((item["_note"], item["score"]))
+            seeds.append((item["_note"], 1 / (RRF_K + rank)))
     seen_chunks = {item["_id"] for item in text}
-    strong_returned = any(item["found_by"] == "meaning" and item["score"] >= STRONG_COSINE
-                          for item in kept_text)
-    links, skipped, neighbour_notes = ([], [], 0) if weak and not strong_returned else _neighbours(
-        con, seeds, hub_cap, seen_chunks, scope)
+    links, skipped, neighbour_notes = ([], [], 0) if not _supports_answer(text_supported, kept_text) else _neighbours(
+        con, seeds, hub_cap, seen_chunks, scope, semantic_scores)
     if extra_links:
         # Leads reached from an own note's link belong in the lead tail. Text matches
         # still go first; a linked copy of the same lead note would be duplicate evidence.
@@ -350,12 +360,12 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
 
     kept_links, _ = apply_budget(links, budget - _size(kept_text))
     if links and not kept_links:
-        kept_text, _ = apply_budget(text, budget - int(budget * graph_share))
+        # A graph reserve cannot evict an admitted semantic seed, including a dual-lane hit.
+        protected = max((_size(kept_text[:rank + 1]) for rank, item in enumerate(kept_text)
+                         if item.get("cosine", 0) > COSINE_FLOOR), default=0)
+        kept_text, _ = apply_budget(text, max(protected, budget - int(budget * graph_share)))
         kept_links, _ = apply_budget(links, budget - _size(kept_text))
     kept = kept_text + kept_links
-    if weak and any(item["found_by"] == "meaning" and item["score"] >= STRONG_COSINE
-                    for item in kept):
-        weak = False
     for item in kept:
         for private in ("_id", "_note", "_bm25", "_fusion"):
             item.pop(private, None)
@@ -368,16 +378,15 @@ def _search_tier(con: sqlite3.Connection, query: str, parsed_terms: list[str], b
         "query_terms": len(terms), "content_terms": len(content),
         "best_terms_matched": max(matched_content.values(), default=0),
         "best_mass_share": math.floor(mass_share * 1000) / 1000,
-        "unmatched_terms": unmatched, "weak_match": weak,
-        "_weak_without_semantic": weak_without_semantic,
+        "unmatched_terms": unmatched,
         "bytes_used": _size(kept), "budget_bytes": budget,
         "skipped_hubs": skipped, "expanded_notes": len(seeds) - len(skipped),
         "graph_neighbor_notes": neighbour_notes}}
-    return result, seeds, seen_chunks
+    return result, seeds, seen_chunks, text_supported
 
 
 def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DEFAULT_DB,
-           graph_share: float = 0.4, scope: str = "own") -> dict:
+           graph_share: float = 0.4, scope: str = "own", semantic: bool = True) -> dict:
     if scope not in ("own", "leads", "all"):
         raise ValueError(f"unknown search scope: {scope}")
     parsed_terms = parse_terms(query)
@@ -386,29 +395,31 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
                 "returned_leads": 0, "dropped_by_budget": 0, "weak_match": False,
                 "skipped_hubs": []}}
-    semantic = semantic_run(db_path, query)
+    semantic_result = semantic_run(db_path, query) if semantic else {"semantic": "off: word-only"}
     con = connect_ro(db_path)
     con.row_factory = sqlite3.Row
     try:
-        result, seeds, seen_chunks = _search_tier(
-            con, query, parsed_terms, budget, hub_cap, graph_share, scope, semantic=semantic)
+        result, seeds, seen_chunks, text_supported = _search_tier(
+            con, query, parsed_terms, budget, hub_cap, graph_share, scope, semantic=semantic_result)
         if scope == "own":
             # The 618-chunk catalog displaced own notes in 24/120 queries, including
             # eight with no catalog result: it occupied the bm25 pool and changed word
             # statistics before reranking. Each tier gets its own pool and statistics.
-            cross_links, _, _ = ([], [], 0) if result["coverage"]["weak_match"] else _neighbours(
-                con, seeds, hub_cap, seen_chunks, "leads")
-            lead, _, _ = _search_tier(con, query, parsed_terms, budget, hub_cap,
-                                      graph_share, "leads", cross_links, semantic)
+            own_supported = _supports_answer(text_supported, result["fragments"])
+            cross_links, _, _ = ([], [], 0) if not own_supported else _neighbours(
+                con, seeds, hub_cap, seen_chunks, "leads", dict(semantic_result.get("rankings", [])))
+            lead, _, _, lead_text_supported = _search_tier(con, query, parsed_terms, budget, hub_cap,
+                                      graph_share, "leads", cross_links, semantic_result)
+            lead_supported = _supports_answer(lead_text_supported, lead["fragments"])
             own, own_cov = result["fragments"], result["coverage"]
-            if own_cov["dropped_by_budget"] and not own_cov["weak_match"]:
+            if own_cov["dropped_by_budget"] and own_supported:
                 # The user asked for "own notes, plus a little of what I saved": a dense
                 # own answer used to leave the leads nothing (0 of 10 catalog hits on
                 # "self-hosted bookmarks"). Give the top leads room by dropping the
                 # weakest own fragments — never the first, never more than a share of
                 # the budget, so a small budget still opens with an own note.
                 matching = [f for f in lead["fragments"]
-                            if not lead["coverage"]["weak_match"] or f["found_by"] != "meaning"]
+                            if lead_supported or f["found_by"] == "link"]
                 tail = matching[:LEAD_TAIL]
                 freed, allowance = 0, int(budget * LEAD_RESERVE_SHARE)
                 while tail and len(own) > 1 and _size(own) + _size(tail) > budget:
@@ -423,15 +434,10 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
                 # A thin or weak own answer lets leads fill whatever it left, so a
                 # question only leads can answer still gets one.
                 lead_candidates = [f for f in lead["fragments"]
-                                   if not lead["coverage"]["weak_match"] or f["found_by"] != "meaning"]
+                                   if lead_supported or f["found_by"] == "link"]
                 tail, _ = apply_budget(lead_candidates, budget - _size(own))
             result["fragments"] = own + tail
             own_cov, lead_cov = result["coverage"], lead["coverage"]
-            if own_cov.pop("_weak_without_semantic"):
-                own_cov["weak_match"] = not any(
-                    item["found_by"] == "meaning" and item["score"] >= STRONG_COSINE
-                    for item in own)
-            lead_cov.pop("_weak_without_semantic")
             own_cov["returned"] = len(result["fragments"])
             own_cov["returned_leads"] = len(tail)
             own_cov["matched_lead_chunks"] = lead_cov["matched_chunks"]
@@ -445,17 +451,19 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             own_cov["skipped_hubs"].extend(lead_cov["skipped_hubs"])
             own_cov["expanded_notes"] += lead_cov["expanded_notes"]
             own_cov["graph_neighbor_notes"] += lead_cov["graph_neighbor_notes"]
+            answer_fragments = own
         else:
-            result["coverage"].pop("_weak_without_semantic")
             result["coverage"]["returned_leads"] = sum(
                 item["type"] == "lead" for item in result["fragments"])
-        result["coverage"]["semantic"] = semantic["semantic"]
-        if semantic.get("old_vector_files"):
-            result["coverage"]["semantic_old_vector_files"] = semantic["old_vector_files"]
-        if semantic["semantic"].startswith("partial:"):
+            answer_fragments = result["fragments"]
+        result["coverage"]["weak_match"] = not _supports_answer(text_supported, answer_fragments)
+        result["coverage"]["semantic"] = semantic_result["semantic"]
+        if semantic_result.get("old_vector_files"):
+            result["coverage"]["semantic_old_vector_files"] = semantic_result["old_vector_files"]
+        if semantic_result["semantic"].startswith("partial:"):
             result["coverage"]["semantic_next_step"] = "Run scripts/index.py --embed (with the same --vault and --db for an isolated index)"
-        result["coverage"]["semantic_embedded_chunks"] = semantic.get("embedded_chunks", 0)
-        result["coverage"]["semantic_total_chunks"] = semantic.get("total_chunks", 0)
+        result["coverage"]["semantic_embedded_chunks"] = semantic_result.get("embedded_chunks", 0)
+        result["coverage"]["semantic_total_chunks"] = semantic_result.get("total_chunks", 0)
         result["coverage"]["returned_by_meaning"] = sum(
             item["found_by"] == "meaning" for item in result["fragments"])
         return result
@@ -498,8 +506,11 @@ def main() -> None:
     if result["coverage"].get("semantic", "").startswith("partial:"):
         command = ["python3", str(Path(__file__).with_name("index.py").resolve()), "--embed",
                    "--db", str(db_path)]
-        if args.vault is not None:
-            command.extend(("--vault", str(args.vault)))
+        try:
+            embed_vault = args.vault or vault_from_config()
+        except NotConfigured:
+            embed_vault = "<vault used to build this index>"
+        command.extend(("--vault", str(embed_vault)))
         result["coverage"]["semantic_next_step"] = shlex.join(command)
     # Every fragment path is vault-relative, so without the root the reader cannot open
     # the note an excerpt was cut out of — and starts guessing where the vault lives.

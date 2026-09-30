@@ -16,24 +16,34 @@ VENV_PYTHON = HOME_DIR / "venv" / "bin" / "python"
 SEARCH_EMBED_LIMIT = 8
 MODEL_ID = "ibm-granite/granite-embedding-311m-multilingual-r2"
 MODEL_REVISION = "44399559930365213510b1ee2eb15ded83374f0e"
-VECTOR_FILE = f"vectors-{MODEL_ID.rsplit('/', 1)[-1]}-{MODEL_REVISION[:12]}.db"
+VECTOR_SUFFIX = f"vectors-{MODEL_ID.rsplit('/', 1)[-1]}-{MODEL_REVISION[:12]}.db"
 
 
 def vector_db_path(db_path: Path) -> Path:
-    return db_path.with_name(VECTOR_FILE)
+    return db_path.with_name(f"{db_path.stem}.{VECTOR_SUFFIX}")
+
+
+def stub_enabled() -> bool:
+    """A test encoder requires an explicitly isolated home and a test opt-in."""
+    home = os.environ.get("DONT_FORGET_HOME")
+    return (os.environ.get("DONT_FORGET_EMBED_STUB") == "1"
+            and os.environ.get("DONT_FORGET_TEST") == "1" and bool(home)
+            and Path(home).resolve() != (Path.home() / ".dont-forget").resolve())
 
 
 def run(db_path: Path, query: str | None = None, full: bool = False) -> dict:
     """Return ranked chunk IDs, or a short reason why semantic search is off."""
-    old_files = sorted(path.name for path in db_path.parent.glob("vectors-*.db")
-                       if path.name != VECTOR_FILE)
+    old_files = sorted(path.name for path in db_path.parent.glob(f"{db_path.stem}.vectors-*.db")
+                       if path != vector_db_path(db_path))
 
     def finish(result: dict) -> dict:
         if old_files:
             result["old_vector_files"] = old_files
         return result
 
-    stub = os.environ.get("DONT_FORGET_EMBED_STUB") == "1"
+    if not db_path.is_file():
+        return finish({"semantic": "off: no index"})
+    stub = stub_enabled()
     python = Path(sys.executable) if stub else VENV_PYTHON
     if not python.is_file():
         return finish({"semantic": "off: no venv"})

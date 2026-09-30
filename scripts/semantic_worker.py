@@ -11,8 +11,10 @@ import os
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
-from semantic import MODEL_ID, MODEL_REVISION
+from common import connect_ro
+from semantic import MODEL_ID, MODEL_REVISION, stub_enabled
 
 
 def stub_vector(text: str) -> list[float]:
@@ -25,6 +27,8 @@ def stub_vector(text: str) -> list[float]:
 
 
 class StubEncoder:
+    storage_bytes = 4
+
     def encode_documents(self, texts):
         return [stub_vector(text) for text in texts]
 
@@ -41,7 +45,10 @@ class StubEncoder:
 
 
 class ModelEncoder:
+    storage_bytes = 2
+
     def __init__(self):
+        os.environ["HF_HUB_OFFLINE"] = "1"
         try:
             import numpy as np
             import torch
@@ -78,22 +85,35 @@ def cosine(query, vector, query_norm):
 
 def execute(request: dict, encoder=None) -> dict:
     started = time.perf_counter()
-    index = sqlite3.connect(request["db"], timeout=30)
-    vectors = sqlite3.connect(request["vectors_db"], timeout=30)
     try:
+        index = connect_ro(Path(request["db"]))
+    except sqlite3.Error:
+        if not Path(request["db"]).is_file():
+            return {"semantic": "off: no index"}
+        raise
+    vectors = None
+    try:
+        vectors = sqlite3.connect(request["vectors_db"], timeout=30)
         vectors.execute("PRAGMA busy_timeout=30000")
         vectors.execute("CREATE TABLE IF NOT EXISTS chunk_vectors (hash TEXT PRIMARY KEY, vector BLOB NOT NULL, dim INTEGER NOT NULL)")
-        chunks = [(row[0], row[1], row[2], hashlib.sha256(row[2].encode()).hexdigest())
-                  for row in index.execute("SELECT c.id,n.type,c.body FROM chunks c JOIN notes n ON n.id=c.note_id")]
+        chunks = [(row[0], row[1], hashlib.sha256(row[1].encode()).hexdigest())
+                  for row in index.execute("SELECT id,body FROM chunks")]
         known = {row[0]: (row[1], row[2]) for row in vectors.execute("SELECT hash,vector,dim FROM chunk_vectors")}
-        missing = {digest: body for _, _, body, digest in chunks if digest not in known}
+        storage_bytes = encoder.storage_bytes if encoder is not None else (4 if stub_enabled() else 2)
+        invalid = [digest for digest, (blob, dim) in known.items()
+                   if dim <= 0 or len(blob) != dim * storage_bytes]
+        with vectors:
+            vectors.executemany("DELETE FROM chunk_vectors WHERE hash=?", ((digest,) for digest in invalid))
+        for digest in invalid:
+            del known[digest]
+        missing = {digest: body for _, body, digest in chunks if digest not in known}
         if request["query"] is None and not missing:
             return {"semantic": "ready", "embedded_chunks": len(chunks),
                     "total_chunks": len(chunks), "new_vectors": 0,
                     "seconds": round(time.perf_counter() - started, 3)}
 
         if encoder is None:
-            encoder = StubEncoder() if os.environ.get("DONT_FORGET_EMBED_STUB") == "1" else ModelEncoder()
+            encoder = StubEncoder() if stub_enabled() else ModelEncoder()
         inserted = 0
         if request["full"] or len(missing) <= request["limit"]:
             pairs = list(missing.items())
@@ -108,7 +128,7 @@ def execute(request: dict, encoder=None) -> dict:
                     inserted += cursor.rowcount
             known = {row[0]: (row[1], row[2]) for row in vectors.execute("SELECT hash,vector,dim FROM chunk_vectors")}
 
-        embedded = sum(digest in known for _, _, _, digest in chunks)
+        embedded = sum(digest in known for _, _, digest in chunks)
         total = len(chunks)
         status = "ready" if embedded == total else f"partial: {embedded} of {total} chunks"
         result = {"semantic": status, "embedded_chunks": embedded, "total_chunks": total,
@@ -117,27 +137,21 @@ def execute(request: dict, encoder=None) -> dict:
             query = encoder.encode_query(request["query"])
             query_norm = math.sqrt(sum(float(value) ** 2 for value in query)) or 1.0
             scored = []
-            for chunk_id, note_type, _, digest in chunks:
+            for chunk_id, _, digest in chunks:
                 if digest not in known:
                     continue
                 vector = encoder.unpack(*known[digest])
                 if vector is None:
                     continue
                 score = cosine(query, vector, query_norm)
-                scored.append((chunk_id, note_type, round(score, 6)))
-            scored.sort(key=lambda row: (-row[2], row[0]))
-            result["rankings"] = {
-                "all": [[chunk_id, score] for chunk_id, _, score in scored[:500]],
-                "own": [[chunk_id, score] for chunk_id, kind, score in scored
-                        if (kind or "").strip().casefold() != "lead"][:500],
-                "leads": [[chunk_id, score] for chunk_id, kind, score in scored
-                          if (kind or "").strip().casefold() == "lead"][:500],
-            }
-            result["best_cosine"] = {scope: rows[0][1] if rows else None
-                                     for scope, rows in result["rankings"].items()}
+                scored.append([chunk_id, round(score, 6)])
+            scored.sort(key=lambda row: (-row[1], row[0]))
+            # Scope belongs to search.py; keep all ranks so each scope gets its pool.
+            result["rankings"] = scored
         return result
     finally:
-        vectors.close()
+        if vectors is not None:
+            vectors.close()
         index.close()
 
 
