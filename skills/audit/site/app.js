@@ -28,10 +28,13 @@
     constructor(canvas, { offsetX = 0, fill = 0.88, intro = false, constellation = false }) {
       this.c = canvas; this.ctx = canvas.getContext("2d");
       this.offsetX = offsetX; this.fill = fill; this.constellation = constellation;
+      // A finding can name a note the map has no place for (died, or no vector): it stays invisible.
       this.pts = A.notes.map((n, i) => {
+        const off = n.x == null;
+        if (off) n = { ...n, x: 0.5, y: 0.5 };
         const ang = Math.random() * Math.PI * 2, rad = Math.random() * 0.04;
         return {
-          i, x: n.x, y: n.y, col: colorOf[n.p], p: n.p, t: n.t, god: n.k === "godnote",
+          i, off, x: n.x, y: n.y, col: colorOf[n.p], p: n.p, t: n.t, god: n.k === "godnote",
           sx: 0.5 + Math.cos(ang) * rad, sy: 0.5 + Math.sin(ang) * rad,
           delay: intro && !reduced ? Math.hypot(n.x - 0.5, n.y - 0.5) * 1100 + Math.random() * 250 : -1e9,
           a: 0, r: 0, ta: 0.85, tr: n.k === "godnote" ? 3.2 : 2.1, tw: Math.random() * 6.28,
@@ -46,9 +49,10 @@
     nearEdges() {
       const out = [], P = this.pts;
       for (let i = 0; i < P.length; i++) {
+        if (P[i].off) continue;
         let best = -1, bd = 0.0006;
         for (let j = 0; j < P.length; j++) {
-          if (i === j) continue;
+          if (i === j || P[j].off) continue;
           const d = (P[i].x - P[j].x) ** 2 + (P[i].y - P[j].y) ** 2;
           if (d < bd) { bd = d; best = j; }
         }
@@ -75,7 +79,7 @@
       this.setAll(0.13, 1.7);
       ids.forEach(i => { this.pts[i].ta = 1; this.pts[i].tr = 4.6; });
       let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
-      ids.forEach(i => { const p = this.pts[i]; x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+      ids.filter(i => !this.pts[i].off).forEach(i => { const p = this.pts[i]; x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
       // Groups sit tight on the map, so the frame is the group's own span grown by pad, not a fixed margin.
       const span = Math.max(Math.max(x1 - x0, y1 - y0) * (1 + pad * 4), 0.08);
       this.tcam = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, s: Math.min(Math.max(1 / span, 1), 10) };
@@ -109,6 +113,7 @@
       if (this.overlay) this.overlay(g, (now - this.focusAt), now);
 
       for (const p of this.pts) {
+        if (p.off) continue;
         p.a += (p.ta - p.a) * k; p.r += (p.tr - p.r) * k;
         const t = ease((el - p.delay) / 1300);
         if (t <= 0) continue;
@@ -129,7 +134,7 @@
     nearest(mx, my) {
       let best = null, bd = 144;
       for (const p of this.pts) {
-        if (p.a < 0.3) continue;
+        if (p.off || p.a < 0.3) continue;
         const [x, y] = this.toScreen(p.x, p.y), d = (x - mx) ** 2 + (y - my) ** 2;
         if (d < bd) { bd = d; best = p; }
       }
@@ -203,7 +208,7 @@
     };
   };
 
-  const ORDERED = new Set(["спор", "устарело"]);
+  const ORDERED = new Set(["спор", "устарело", "заголовок устарел"]);
   const disputeOverlay = (view, d) => {
     const ordered = d.ordered && ORDERED.has(d.verdict);
     const base = arcOverlay(view, d.old.id, d.new.id, ordered
@@ -219,18 +224,18 @@
     };
   };
 
-  const crossOut = (view, id) => (ctx, since) => {
+  const crossOut = (view, id, text) => (ctx, since) => {
     const p = view.pts[id], [x, y] = view.toScreen(p.x, p.y), t = reduced ? 1 : ease((since - 300) / 400);
     ctx.strokeStyle = "#ff8f6b"; ctx.lineWidth = 2; ctx.globalAlpha = t;
     ctx.beginPath(); ctx.moveTo(x - 8, y - 8); ctx.lineTo(x + 8, y + 8); ctx.moveTo(x + 8, y - 8); ctx.lineTo(x - 8, y + 8); ctx.stroke();
     ctx.globalAlpha = 1;
-    if (since > 500 || reduced) label(ctx, x, y - 20, "устарело, но поиск считает живой", "#ff8f6b");
+    if (since > 500 || reduced) label(ctx, x, y - 20, text, "#ff8f6b");
   };
 
   // ---------- findings: each one knows how to draw itself as a card, a list row and a map focus ----------
   const plural = (n, one, few, many) => n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
   const dots = ids => [...new Set(ids.map(i => A.notes[i].p))].slice(0, 6).map(dot).join("");
-  const WARN = new Set(["спор", "устарело"]);
+  const WARN = ORDERED;
   const mark = key => `<span class="mark" data-key="${key}"><span class="mark-btns"><button type="button" data-v="yes">согласен</button><button type="button" data-v="no">нет</button><button type="button" class="note-toggle" aria-label="комментарий">✎</button></span><textarea class="mark-note" rows="2" hidden></textarea></span>`;
 
   const groupFinding = g => {
@@ -246,24 +251,8 @@
         ${g.members.length > shown.length ? `<li class="more" style="transition-delay:${120 + shown.length * 70}ms">и ещё ${g.members.length - shown.length}</li>` : ""}</ul>
         ${mark(g.key)}
       </article>`,
-      row: `<span class="row-dots">${dots(g.members)}</span><span class="row-main"><b>${esc(g.name)}</b><span>${esc(g.thesis)}</span>${mark(g.key)}</span><span class="row-meta">${g.badge ? `<span class="pill">${g.badge.startsWith("дополнить") ? "дополнить" : "в правила"}</span> ` : ""}${g.members.length}</span>`,
+      row: `<span class="row-dots">${dots(g.members)}</span><span class="row-main"><b>${esc(g.name)}</b><span>${esc(g.thesis)}</span>${mark(g.key)}</span><span class="row-meta">${g.badge ? `<span class="pill">${g.badge.startsWith("дополнить") ? "дополнить" : g.badge === "созрело до правила" ? "в правила" : "godnote"}</span> ` : ""}${g.members.length}</span>`,
       apply: v => v.focus(g.members, groupOverlay(v, g)),
-    };
-  };
-  const linkFinding = l => {
-    const a = A.notes[l.a], b = A.notes[l.b];
-    return {
-      card: `<article class="card">
-        <div class="pair">
-          <div class="side"><span class="proj">${dot(a.p)}${esc(nameOf(a.p))}</span><p>${esc(a.t)}</p></div>
-          <div class="bridge" aria-hidden="true"></div>
-          <div class="side"><span class="proj">${dot(b.p)}${esc(nameOf(b.p))}</span><p>${esc(b.t)}</p></div>
-        </div>
-        <p class="common"><b>Общее:</b> ${esc(l.common)}</p>
-        ${mark(l.key)}
-      </article>`,
-      row: `<span class="row-dots">${dot(a.p)}${dot(b.p)}</span><span class="row-main"><b>${esc(nameOf(a.p))} ↔ ${esc(nameOf(b.p))}</b><span>${esc(l.common)}</span>${mark(l.key)}</span><span class="row-meta">${esc(l.kind || "")}</span>`,
-      apply: v => v.focus([l.a, l.b], arcOverlay(v, l.a, l.b), 0.45),
     };
   };
   const disputeFinding = d => {
@@ -280,7 +269,7 @@
         ${mark(d.key)}
       </article>`,
       row: `<span class="row-dots">${dot(A.notes[d.old.id].p)}</span><span class="row-main"><b>${esc(d.topic)}</b><span>${esc(d.fix)}</span><span class="row-more">${versions}</span>${mark(d.key)}</span><span class="row-meta"><span class="pill ${WARN.has(d.verdict) ? "warn" : ""}">${esc(d.verdict)}</span></span>`,
-      apply: v => d.new.id == null ? v.focus([d.old.id], crossOut(v, d.old.id), 0.45) : v.focus([d.old.id, d.new.id], disputeOverlay(v, d), 0.45),
+      apply: v => d.new.id == null ? v.focus([d.old.id], crossOut(v, d.old.id, d.verdict === "заголовок устарел" ? "заголовок говорит не то, что поправка" : "устарело, но поиск считает живой"), 0.45) : v.focus([d.old.id, d.new.id], disputeOverlay(v, d), 0.45),
     };
   };
 
@@ -288,6 +277,7 @@
   const steps = [];
   const dropNote = (n, what) => n ? ` · ещё ${n} ${what} агент прочитал и отбросил` : "";
   const chapter = (no, title, text, findings, featured, dropped, droppedWhat) => {
+    if (!findings.length) return;
     steps.push({ html: `<div class="chapter"><div class="no">${no}</div><h2>${title}</h2><p>${text}</p></div>`, apply: v => v.overview() });
     findings.slice(0, featured).forEach(f => steps.push({ html: f.card, apply: f.apply }));
     if (findings.length > featured) steps.push({
@@ -299,11 +289,9 @@
   };
   const D = A.dropped || {};
   chapter("01", "Просятся в godnote", "Карточки про одно и то же, у которых нет общей страницы-вывода. Название и тезис предлагает агент, решаешь ты.",
-    A.godnotes.map(groupFinding), 5, D.groups, "групп");
-  chapter("02", "Неожиданные связи", "Одна и та же мысль, записанная в разных проектах. Ссылки между ними нет, даже через третью заметку.",
-    A.links.map(linkFinding), 5, D.links, "пар");
-  chapter("03", "Устарели, спорят, повторяются", "Пары, которые агент прочитал целиком. Сверху те, где волт сейчас может подсунуть неверный совет, внизу те, что просто стоит связать ссылкой.",
-    A.disputes.map(disputeFinding), 4, D.disputes, "пар");
+    A.godnotes.map(groupFinding), 5, D.group, "групп");
+  chapter("02", "Устарели, спорят, повторяются", "Пары, которые агент прочитал целиком. Сверху те, где волт сейчас может подсунуть неверный совет.",
+    A.disputes.map(disputeFinding), 4, (D.same || 0) + (D.stale || 0), "пар");
 
   // ---------- wire up ----------
   document.getElementById("date").textContent = A.date;
