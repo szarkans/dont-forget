@@ -79,10 +79,12 @@
       this.setAll(0.13, 1.7);
       ids.forEach(i => { this.pts[i].ta = 1; this.pts[i].tr = 4.6; });
       let x0 = 1, x1 = 0, y0 = 1, y1 = 0;
-      ids.filter(i => !this.pts[i].off).forEach(i => { const p = this.pts[i]; x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
+      const on = ids.filter(i => !this.pts[i].off);
+      on.forEach(i => { const p = this.pts[i]; x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y); });
       // Groups sit tight on the map, so the frame is the group's own span grown by pad, not a fixed margin.
+      // A finding whose notes are all off the map has nothing to frame: the whole map stays in view.
       const span = Math.max(Math.max(x1 - x0, y1 - y0) * (1 + pad * 4), 0.08);
-      this.tcam = { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, s: Math.min(Math.max(1 / span, 1), 10) };
+      this.tcam = on.length ? { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, s: Math.min(Math.max(1 / span, 1), 10) } : { cx: 0.5, cy: 0.5, s: 1 };
       this.overlay = overlay; this.mark();
     }
     project(p) {
@@ -181,6 +183,7 @@
   const arcOverlay = (view, a, b, { dashed = false, from = "", to = "" } = {}) => {
     const P = view.pts;
     return (ctx, since, now) => {
+      if (P[a].off || P[b].off) return;
       const [ax, ay] = view.toScreen(P[a].x, P[a].y), [bx, by] = view.toScreen(P[b].x, P[b].y);
       const mx = (ax + bx) / 2, my = (ay + by) / 2, dx = bx - ax, dy = by - ay, len = Math.hypot(dx, dy) || 1;
       const bend = Math.min(90, len * 0.45), qx = mx - dy / len * bend, qy = my + dx / len * bend;
@@ -216,7 +219,7 @@
       : { dashed: d.verdict === "дубль" });
     return (ctx, since, now) => {
       base(ctx, since, now);
-      if (!ordered) return;
+      if (!ordered || view.pts[d.old.id].off) return;
       const [x, y] = view.toScreen(view.pts[d.old.id].x, view.pts[d.old.id].y), t = reduced ? 1 : ease((since - 700) / 400);
       ctx.strokeStyle = "#ff8f6b"; ctx.lineWidth = 2; ctx.globalAlpha = t;
       ctx.beginPath(); ctx.moveTo(x - 7, y - 7); ctx.lineTo(x + 7, y + 7); ctx.moveTo(x + 7, y - 7); ctx.lineTo(x - 7, y + 7); ctx.stroke();
@@ -225,7 +228,9 @@
   };
 
   const crossOut = (view, id, text) => (ctx, since) => {
-    const p = view.pts[id], [x, y] = view.toScreen(p.x, p.y), t = reduced ? 1 : ease((since - 300) / 400);
+    const p = view.pts[id];
+    if (p.off) return;
+    const [x, y] = view.toScreen(p.x, p.y), t = reduced ? 1 : ease((since - 300) / 400);
     ctx.strokeStyle = "#ff8f6b"; ctx.lineWidth = 2; ctx.globalAlpha = t;
     ctx.beginPath(); ctx.moveTo(x - 8, y - 8); ctx.lineTo(x + 8, y + 8); ctx.moveTo(x + 8, y - 8); ctx.lineTo(x - 8, y + 8); ctx.stroke();
     ctx.globalAlpha = 1;
@@ -251,7 +256,7 @@
         ${g.members.length > shown.length ? `<li class="more" style="transition-delay:${120 + shown.length * 70}ms">и ещё ${g.members.length - shown.length}</li>` : ""}</ul>
         ${mark(g.key)}
       </article>`,
-      row: `<span class="row-dots">${dots(g.members)}</span><span class="row-main"><b>${esc(g.name)}</b><span>${esc(g.thesis)}</span>${mark(g.key)}</span><span class="row-meta">${g.badge ? `<span class="pill">${g.badge.startsWith("дополнить") ? "дополнить" : g.badge === "созрело до правила" ? "в правила" : "godnote"}</span> ` : ""}${g.members.length}</span>`,
+      row: `<span class="row-dots">${dots(g.members)}</span><span class="row-main"><b>${esc(g.name)}</b><span>${esc(g.thesis)}</span>${mark(g.key)}</span><span class="row-meta">${g.badge ? `<span class="pill">${esc(g.badge)}</span> ` : ""}${g.members.length}</span>`,
       apply: v => v.focus(g.members, groupOverlay(v, g)),
     };
   };
@@ -369,27 +374,36 @@
     if (!db) return;
     document.body.classList.add("can-mark"); chip.hidden = false;
     const col = db.collection("decisions");
+    // Keys whose latest local mark is not saved yet: typed and waiting for the pause, or written and
+    // not acknowledged. A snapshot is older than such a mark, so for these keys the local one wins.
+    const unsaved = {}, typing = new Set();
     col.onSnapshot(snap => {
-      const typing = document.activeElement?.closest?.(".mark")?.dataset.key;
-      const keep = typing && decisions[typing];
+      const local = {};
+      for (const k in decisions) if (unsaved[k] || typing.has(k)) local[k] = decisions[k];
       for (const k in decisions) delete decisions[k];
       snap.docs.forEach(d => { const x = d.data(); decisions[d.id] = { v: x.v || undefined, c: x.c || "" }; });
-      if (keep) decisions[typing] = { ...decisions[typing], c: keep.c };
+      Object.assign(decisions, local);
       paint();
     }, e => { console.warn("decisions subscription stopped", e.code, e.message); chipErr.textContent = "отметки не загрузились, обнови страницу"; });
     // One write at a time per finding: each save waits for the previous one to the same document.
+    // The mark is taken when the user acts, not when the write gets its turn.
     const queue = {};
-    const save = key => (queue[key] = (queue[key] || Promise.resolve()).then(async () => {
-      const d = decisions[key] || {};
-      try {
-        if (d.v || d.c) await col.doc(key).set({ v: d.v || null, c: d.c || "", at: new Date().toISOString() });
-        else await col.doc(key).delete();
-        chipErr.textContent = "";
-      } catch (err) {
-        console.warn("decision not saved", key, err.code, err.message);
-        chipErr.textContent = "не сохранилось, попробуй ещё раз";
-      }
-    }));
+    const save = key => {
+      const d = { ...(decisions[key] || {}) };
+      unsaved[key] = (unsaved[key] || 0) + 1;
+      queue[key] = (queue[key] || Promise.resolve()).then(async () => {
+        try {
+          if (d.v || d.c) await col.doc(key).set({ v: d.v || null, c: d.c || "", at: new Date().toISOString() });
+          else await col.doc(key).delete();
+          chipErr.textContent = "";
+        } catch (err) {
+          console.warn("decision not saved", key, err.code, err.message);
+          chipErr.textContent = "не сохранилось, попробуй ещё раз";
+        } finally {
+          if (!--unsaved[key]) delete unsaved[key];
+        }
+      });
+    };
     document.addEventListener("click", e => {
       const m = e.target.closest(".mark");
       if (!m) return;
@@ -413,7 +427,8 @@
       const key = note.parentElement.dataset.key;
       decisions[key] = { ...(decisions[key] || {}), c: note.value };
       document.querySelectorAll(`.mark[data-key="${key}"] .mark-note`).forEach(n => { if (n !== note) n.value = note.value; });
-      clearTimeout(timers[key]); timers[key] = setTimeout(() => { save(key); paint(); }, 700);
+      typing.add(key);
+      clearTimeout(timers[key]); timers[key] = setTimeout(() => { save(key); typing.delete(key); paint(); }, 700);
     });
   })();
 
