@@ -208,6 +208,11 @@ h1 {
 .decided span:empty { display: none; }
 
 @media (max-width: 860px) {
+  /* The badge takes its own line above the title, so the text and the mark buttons get the full width */
+  .rows li { grid-template-columns: 34px minmax(0, 1fr); row-gap: 4px; }
+  .rows li .row-dots { grid-row: 1 / 3; }
+  .rows li .row-meta { grid-column: 2; grid-row: 1; padding-top: 0; }
+  .rows li .row-main { grid-column: 2; grid-row: 2; }
   .hero::after { background: linear-gradient(0deg, rgba(11,14,26,.97) 0%, rgba(11,14,26,.9) 48%, rgba(11,14,26,.15) 80%); }
   .story { grid-template-columns: 1fr; gap: 0; }
   .map-wrap { height: 46svh; z-index: 2; background: linear-gradient(var(--bg) 85%, rgba(11,14,26,0)); }
