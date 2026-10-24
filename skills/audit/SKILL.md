@@ -65,6 +65,23 @@ work rather than an opinion. A "no" is dropped; its comment says why. The heavy 
 yours, with the user's mark as consent: read both notes before acting, because a verdict is
 a reader's version, not a fact.
 
+How the heavy work lands, so the next audit reads the vault the way this one left it:
+
+- A stale note gets `died:` only when the whole note is wrong. When only part of it is, leave
+  it alive and append a dated `## Поправка` naming what changed and linking the newer note;
+  the newer one links back as `supersedes [[Old]]`.
+- A dispute is not settled by you. Both notes get a `спорит с [[Other]] (date)` line in their
+  links section; who is right is the user's call.
+- Duplicates merge into the fuller note (the newer one on a tie): carry over only the facts it
+  lacks, add the other's name to its `aliases:`, and give the other `died:` plus a
+  `слита в [[Kept]]` line. Never delete the file — `died:` is what search reads.
+- A title a correction contradicts gets renamed to what the note now says, with the old title
+  kept in `aliases:` so existing links still resolve; update the links that named it.
+- A godnote is written per `that`'s godnote rules from every card of its group. If the cards
+  carry more than one thought, say so and write none.
+
+Commit each kind separately in the vault, so any one of them reverts alone.
+
 ## Reporting
 
 Lead with the few rows where you actually propose something, each with its evidence, in
