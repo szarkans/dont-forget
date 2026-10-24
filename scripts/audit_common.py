@@ -24,6 +24,7 @@ LETTER = {"group": "g", "cross": "l", "same": "d", "stale": "s"}
 # Reader verdicts on a same-project pair. "уточняет" is only a missing link; the other three
 # change what the vault says and go to the user.
 SAME_ON_PAGE = ("устарело", "спор", "дубль")
+SAME_VERDICTS = (*SAME_ON_PAGE, "уточняет", "мимо")
 
 
 def finding_key(kind: str, titles: list[str]) -> str:
@@ -61,23 +62,53 @@ def godnote_named(candidate: dict, title: str | None) -> dict | None:
                  if g["title"] == title or g["title"].split(" — ", 1)[-1] == bare), None)
 
 
+def finding_notes(candidate: dict) -> list[dict]:
+    """Every note a finding is about, as the candidate refers to it."""
+    if candidate["kind"] == "group":
+        return candidate["members"]
+    if candidate["kind"] == "stale":
+        return [n for n in (candidate["old"], candidate.get("new")) if n]
+    return [candidate["a"], candidate["b"]]
+
+
+def note_shas(candidate: dict) -> dict:
+    """{path: sha256} of the notes as they were when the candidate was found."""
+    return {n["path"]: n.get("sha256") for n in finding_notes(candidate)}
+
+
+def standing(candidate: dict, verdict: dict | None) -> dict | None:
+    """The verdict that still holds for this candidate, or None when it must be read again.
+
+    A user's decision always holds: the fix it led to rewrites the notes, and that rewrite must
+    not bring the finding back. A reader's verdict holds while the notes it read are unchanged;
+    a verdict from before notes were hashed holds as it is.
+    """
+    if verdict is None or "decided" in verdict or "sha" not in verdict:
+        return verdict
+    return verdict if verdict["sha"] == note_shas(candidate) else None
+
+
 def sort_findings(candidates: dict, verdicts: dict) -> dict:
     """Split read candidates into what is safe to apply, what goes on the page, and what was dropped.
 
-    safe: (candidate, verdict, why) — links only. page: (candidate, verdict). A same-project
-    "устарело" whose old note a confirmed stale finding already covers is the same news twice.
+    safe: (candidate, verdict, why) — links only. page: (candidate, verdict). decided: the
+    page findings the user has already marked, kept for --decisions to read back. A
+    same-project "устарело" whose old note a confirmed stale finding already covers is the
+    same news twice.
     """
-    safe, page, dropped, unread = [], [], Counter(), 0
+    safe, page, decided, dropped, unread = [], [], [], Counter(), 0
     stale_old = set()
     for c in candidates.get("stale", []):
-        v = verdicts.get(c["key"])
+        v = standing(c, verdicts.get(c["key"]))
         if v and v.get("confirmed"):
             stale_old.add(c["old"]["path"])
     for kind in KINDS:
         for c in candidates.get(kind, []):
-            v = verdicts.get(c["key"])
+            v = standing(c, verdicts.get(c["key"]))
             if v is None:
                 unread += 1
+            elif "decided" in v:
+                decided.append((c, v))
             elif kind == "group" and v.get("keep") and v.get("extend"):
                 safe.append((c, v, "в godnote"))
             elif kind == "group" and v.get("keep"):
@@ -87,13 +118,31 @@ def sort_findings(candidates: dict, verdicts: dict) -> dict:
             elif kind == "same" and v.get("verdict") == "уточняет":
                 safe.append((c, v, "уточняет"))
             elif (kind == "same" and v.get("verdict") in SAME_ON_PAGE
-                  and not (v["verdict"] == "устарело" and {c["a"]["path"], c["b"]["path"]} & stale_old)):
+                  and not (v["verdict"] == "устарело" and sides(c, v)[0]["path"] in stale_old)):
                 page.append((c, v))
             elif kind == "stale" and v.get("confirmed"):
                 page.append((c, v))
             else:
                 dropped[kind] += 1
-    return {"safe": safe, "page": page, "dropped": dict(dropped), "unread": unread}
+    return {"safe": safe, "page": page, "decided": decided, "dropped": dict(dropped), "unread": unread}
+
+
+def follow_up_keys(candidate: dict, verdict: dict) -> list[str]:
+    """Stale findings the agreed fix itself will raise next run, so they are decided already.
+
+    The fix writes `supersedes [[Old]]` into the newer note and a `## Поправка` into the old
+    one, or renames a note to the title the reader proposed; each would otherwise come back
+    as a new finding about the very thing the user just settled.
+    """
+    if candidate["kind"] == "group":
+        return []
+    old, new = sides(candidate, verdict)
+    keys = [finding_key("stale", [old["title"]])]
+    if new:
+        keys.append(finding_key("stale", [old["title"], new["title"]]))
+    if verdict.get("new_title"):
+        keys.append(finding_key("stale", [verdict["new_title"]]))
+    return [k for k in keys if k != candidate["key"]]
 
 
 def sides(candidate: dict, verdict: dict) -> tuple[dict, dict | None]:

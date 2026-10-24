@@ -18,10 +18,14 @@ from semantic import VENV_PYTHON
 
 try:
     import numpy as np
+    import sklearn  # noqa: F401
 except ImportError:
-    if VENV_PYTHON.is_file() and os.path.realpath(sys.executable) != os.path.realpath(VENV_PYTHON):
+    # The venv's python is a symlink to the very binary the system runs, so only sys.prefix
+    # tells the two apart; comparing binaries would never re-run and never find numpy.
+    in_venv = os.path.realpath(sys.prefix) == os.path.realpath(VENV_PYTHON.parent.parent)
+    if VENV_PYTHON.is_file() and not in_venv:
         os.execv(str(VENV_PYTHON), [str(VENV_PYTHON), *sys.argv])
-    raise SystemExit(f"audit_semantic.py needs numpy from the plugin venv ({VENV_PYTHON}); "
+    raise SystemExit(f"audit_semantic.py needs numpy and scikit-learn from the plugin venv ({VENV_PYTHON}); "
                      "run setup.py --install-semantic")
 
 import argparse
@@ -35,6 +39,7 @@ from pathlib import Path
 
 import audit_common as ac
 from common import DEFAULT_DB, connect_ro, vault_from_config
+from index import _unscalar
 from semantic import vector_db_path
 
 PLUGIN = Path(__file__).resolve().parent.parent
@@ -67,11 +72,12 @@ def load(db: Path, vault: Path):
     vcon.close()
     con = connect_ro(db)
     notes = {}
-    for nid, path, title, typ, kind, project, date, died in con.execute(
-            "SELECT id,path,title,type,kind,project,date,died FROM notes"):
+    for nid, path, title, typ, kind, project, date, died, aliases, sha in con.execute(
+            "SELECT id,path,title,type,kind,project,date,died,aliases,sha256 FROM notes"):
         notes[nid] = {"id": nid, "path": path, "title": title, "type": (typ or "").casefold(),
                       "kind": (kind or "").casefold(), "project": project or "", "date": date or "",
-                      "died": died or "", "file": str(vault / path), "chunks": []}
+                      "died": died or "", "aliases": _unscalar(aliases), "sha256": sha,
+                      "file": str(vault / path), "chunks": []}
     for nid, body in con.execute("SELECT note_id, body FROM chunks ORDER BY note_id, ord"):
         v = vec.get(hashlib.sha256(body.encode()).hexdigest())
         if v is not None:
@@ -96,17 +102,18 @@ def pool_matrix(notes: dict):
     shared direction is taken out. Leads count toward the centre but are not candidates.
     """
     live = [n for n in notes.values() if "v" in n and n["type"] in POOL_TYPES and not n["died"]]
-    if not live:
-        raise SystemExit("no live note has a vector: run index.py --embed first")
-    centre = np.mean([n["v"] for n in live], 0)
     pool = [n for n in live if n["type"] != "lead"]
+    if len(pool) < 2:
+        raise SystemExit(f"{len(pool)} live note(s) with a vector, the audit needs at least two to compare: "
+                         "run index.py --embed, or wait for the vault to grow")
+    centre = np.mean([n["v"] for n in live], 0)
     m = np.stack([n["v"] for n in pool]) - centre
     m /= np.linalg.norm(m, axis=1, keepdims=True)
     return pool, m
 
 
 def ref(n: dict) -> dict:
-    return {k: n[k] for k in ("title", "project", "date", "path", "file")}
+    return {k: n[k] for k in ("title", "project", "date", "path", "file", "sha256")}
 
 
 def find_groups(pool, m, neighbours) -> list[dict]:
@@ -146,7 +153,8 @@ def find_pairs(pool, m, neighbours) -> tuple[list[dict], list[dict]]:
     sims = m @ m.T
     for a, b in zip(*np.where(np.triu(sims > PAIR_COS, 1))):
         a, b = int(a), int(b)
-        na, nb = pool[a], pool[b]
+        # Sides in key order, so a reader's "old": "b" names the same note on every run.
+        na, nb = sorted((pool[a], pool[b]), key=lambda n: n["title"])
         if nb["id"] in neighbours[na["id"]]:
             continue
         is_cross = na["project"] and nb["project"] and na["project"] != nb["project"]
@@ -168,10 +176,14 @@ def find_stale(notes: dict, vault: Path) -> list[dict]:
     Three signs: another note says it replaces this one; the note marks itself outdated; the
     note carries a `## Поправка` section, so its title may now claim the opposite of its body.
     """
-    by_name = {}
+    by_name, by_alias = {}, {}
     for n in notes.values():
-        by_name[n["title"].casefold()] = n
-        by_name[Path(n["path"]).stem.casefold()] = n
+        for name in (n["title"], Path(n["path"]).stem, n["path"].removesuffix(".md"), n["path"]):
+            by_name[name.casefold()] = n
+        for name in n["aliases"]:
+            by_alias[name.casefold()] = n
+    # As the index resolves links: an alias only answers where no note owns the name outright.
+    by_name = {**by_alias, **by_name}
     replaced, marked, corrected = [], [], []
     for n in notes.values():
         if "/sessions/" in "/" + n["path"]:
@@ -194,12 +206,11 @@ def find_stale(notes: dict, vault: Path) -> list[dict]:
             corrected.append((n, None, "поправка", heading.group(1).strip()))
     out, seen = [], set()
     for old, new, how, heading in replaced + marked + corrected:
-        if old["path"] in seen:
+        key = ac.finding_key("stale", [old["title"]] + ([new["title"]] if new else []))
+        if key in seen:
             continue
-        seen.add(old["path"])
-        titles = [old["title"]] + ([new["title"]] if new else [])
-        item = {"kind": "stale", "key": ac.finding_key("stale", titles), "how": how,
-                "old": ref(old), "new": ref(new) if new else None}
+        seen.add(key)
+        item = {"kind": "stale", "key": key, "how": how, "old": ref(old), "new": ref(new) if new else None}
         if heading:
             item["correction"] = heading
         out.append(item)
@@ -242,7 +253,7 @@ def cmd_candidates(args) -> dict:
     ac.write_json(run / "candidates.json", {"date": run.name, "vault": str(vault), **found})
     summary = {"run": str(run), "total": {}, "carried": {}, "to_read": {}, "batches": []}
     for kind in ac.KINDS:
-        todo = [c for c in found[kind] if c["key"] not in verdicts]
+        todo = [c for c in found[kind] if ac.standing(c, verdicts.get(c["key"])) is None]
         summary["total"][kind] = len(found[kind])
         summary["carried"][kind] = len(found[kind]) - len(todo)
         summary["to_read"][kind] = len(todo)
@@ -256,6 +267,17 @@ def cmd_candidates(args) -> dict:
     return summary
 
 
+def misshapen(kind: str, answer: dict) -> str | None:
+    """What is wrong with a reader's answer for its kind, or None. Sorting and the page read these fields."""
+    if kind in ("group", "cross") and not isinstance(answer.get("keep"), bool):
+        return f"keep must be true or false, got {answer.get('keep')!r}"
+    if kind == "same" and answer.get("verdict") not in ac.SAME_VERDICTS:
+        return f"verdict must be one of {', '.join(ac.SAME_VERDICTS)}, got {answer.get('verdict')!r}"
+    if kind == "stale" and not isinstance(answer.get("confirmed"), bool):
+        return f"confirmed must be true or false, got {answer.get('confirmed')!r}"
+    return None
+
+
 def cmd_merge(args) -> dict:
     run = args.run or ac.latest_run()
     batches = run / "batches"
@@ -266,7 +288,7 @@ def cmd_merge(args) -> dict:
         if not ann.is_file():
             not_answered.append(ann.name)
             continue
-        asked = {c["key"]: c["kind"] for c in json.loads(inp.read_text(encoding="utf-8"))}
+        asked = {c["key"]: c for c in json.loads(inp.read_text(encoding="utf-8"))}
         try:
             answers = json.loads(ann.read_text(encoding="utf-8"))
             got = [a["key"] for a in answers]
@@ -279,8 +301,13 @@ def cmd_merge(args) -> dict:
             errors.append(f"{ann.name}: keys do not match {inp.name}"
                           f" (not asked: {foreign}, not answered: {missing}, repeated: {len(got) - len(set(got))})")
             continue
+        wrong = [f"{a['key']}: {problem}" for a in answers if (problem := misshapen(asked[a["key"]]["kind"], a))]
+        if wrong:
+            errors.append(f"{ann.name}: answers of the wrong shape: " + "; ".join(wrong))
+            continue
         for a in answers:
-            fresh[a["key"]] = {**a, "kind": asked[a["key"]], "run": run.name}
+            c = asked[a["key"]]
+            fresh[a["key"]] = {**a, "kind": c["kind"], "run": run.name, "sha": ac.note_shas(c)}
     if errors:
         raise SystemExit("merge refused, verdicts.json unchanged:\n" + "\n".join(errors))
     verdicts.update(fresh)
@@ -301,7 +328,7 @@ def cmd_page(args) -> dict:
     sorted_ = ac.sort_findings(cands, ac.load_verdicts())
     notes, neighbours = load(args.db, vault)
     pool, m = pool_matrix(notes)
-    xy = TSNE(n_components=2, metric="cosine", perplexity=min(30.0, len(pool) - 1.0), init="pca",
+    xy = TSNE(n_components=2, metric="cosine", perplexity=max(1.0, min(30.0, len(pool) - 1.0)), init="pca",
               random_state=7).fit_transform(m)
     xy = (xy - xy.min(0)) / np.where(np.ptp(xy, 0) > 0, np.ptp(xy, 0), 1)
     clean = lambda t: t.split(" — ", 1)[-1]
