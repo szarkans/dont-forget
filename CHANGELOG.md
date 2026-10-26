@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.0 — 2026-10-26
+
+### Added
+- A meaning audit in `/dont-forget:audit`: it finds topics without a godnote, notes that
+  went stale, notes that disagree or repeat, and notes ripe to become a rule.
+  - Why: the vault grows faster than anyone links it; on 24.10 it held 59 topics without a
+    godnote and 14 stale notes nobody had marked.
+- Safe links (similar notes pointing at each other) are written by the audit itself, as
+  one git commit, so `git revert` undoes them.
+  - Why: a link changes no meaning, so it does not need the user's time.
+- Everything that changes meaning goes to a private decision page; the user's yes or no
+  is remembered and the finding does not come back.
+  - Why: a rewritten note is a claim, and the vault holds only claims the user agreed to.
+
 ## 0.15.0 — 2026-09-30
 
 ### Added
