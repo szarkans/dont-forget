@@ -13,6 +13,13 @@
 - Everything that changes meaning goes to a private decision page; the user's yes or no
   is remembered and the finding does not come back.
   - Why: a rewritten note is a claim, and the vault holds only claims the user agreed to.
+- The session-start digest is also shown to the user, not only to the model.
+  - Why: the user could not see what the model was told, so a stale thread went unnoticed.
+- `DONT_FORGET_HOOKS=0` switches both hooks off, for headless runs where the digest only gets in the way.
+
+### Fixed
+- `/dont-forget:session` read another session's transcript when two sessions ran in one
+  folder. It now takes its own by `CLAUDE_CODE_SESSION_ID` and says when it has to guess (#31).
 
 ## 0.15.0 — 2026-09-30
 
