@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 PROJECTS = Path.home() / ".claude" / "projects"
@@ -39,9 +41,26 @@ def project_dir(cwd: Path | None = None) -> Path:
 
 
 def newest_transcript(cwd: Path | None = None) -> Path | None:
+    """This session's transcript: the one Claude Code names, else the newest by mtime.
+
+    Two sessions can run in the same folder, and then the newest file belongs to the
+    other one. CLAUDE_CODE_SESSION_ID is the only thing that tells them apart. Falling
+    back is still allowed — a hand-run script has no id — but never quietly.
+    """
     directory = project_dir(cwd)
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if session_id:
+        named = directory / f"{session_id}.jsonl"
+        if named.is_file():
+            return named
+        reason = f"CLAUDE_CODE_SESSION_ID={session_id} has no transcript"
+    else:
+        reason = "CLAUDE_CODE_SESSION_ID is not set"
     files = [path for path in directory.glob("*.jsonl") if path.is_file()]
-    return max(files, key=lambda path: path.stat().st_mtime) if files else None
+    newest = max(files, key=lambda path: path.stat().st_mtime) if files else None
+    if newest is not None:
+        print(f"{reason}; using newest by mtime: {newest}", file=sys.stderr)
+    return newest
 
 
 # A tool call is evidence: a command that failed, a pull request opened, a file written.

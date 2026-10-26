@@ -3,13 +3,17 @@
 
 import _selftest_env  # noqa: F401
 
+import contextlib
+import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import transcript  # noqa: E402
 from transcript import project_dir, render, split, turns  # noqa: E402
 
 SCRIPT = Path(__file__).with_name("transcript.py")
@@ -87,5 +91,36 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-transcript-") as tmp:
     out_of_range = subprocess.run([sys.executable, str(SCRIPT), "--path", str(path), "--piece", "9"],
                                   capture_output=True, text=True)
     assert out_of_range.returncode != 0 and "out of range" in out_of_range.stderr
+
+    # Parallel sessions in one folder share a project directory, so the newest file can
+    # be the other session's. The id Claude Code passes names ours and beats mtime; only
+    # when that file is absent does the mtime fallback run — and it says so, because
+    # quietly handing back someone else's session is the bug.
+    transcript.PROJECTS = Path(tmp) / "projects"
+    workdir = Path(tmp) / "parallel"
+    directory = transcript.project_dir(workdir)
+    directory.mkdir(parents=True)
+    ours = directory / "older-session.jsonl"
+    ours.write_text(json.dumps({"type": "user", "message": {"content": "ours"}}) + "\n",
+                    encoding="utf-8")
+    other = directory / "newer-session.jsonl"
+    other.write_text(json.dumps({"type": "user", "message": {"content": "theirs"}}) + "\n",
+                     encoding="utf-8")
+    # The other session lands last, not merely later.
+    os.utime(ours, (1_000_000_000, 1_000_000_000))
+    os.utime(other, (2_000_000_000, 2_000_000_000))
+
+    os.environ["CLAUDE_CODE_SESSION_ID"] = "older-session"
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        assert transcript.newest_transcript(workdir) == ours, "session id must beat mtime"
+    assert not err.getvalue(), "a named session is not a fallback"
+
+    os.environ["CLAUDE_CODE_SESSION_ID"] = "gone-session"
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        assert transcript.newest_transcript(workdir) == other
+    note = err.getvalue()
+    assert "CLAUDE_CODE_SESSION_ID" in note and "newest" in note, note
+    assert len(note.splitlines()) == 1, note
+    del os.environ["CLAUDE_CODE_SESSION_ID"]
 
 print("ok")
