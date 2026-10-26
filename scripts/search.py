@@ -545,6 +545,9 @@ def main() -> None:
                     "raw": args.raw,
                     "query": query,
                     "weak_match": result["coverage"].get("weak_match"),
+                    # A missing venv silently drops search to words only; the log
+                    # is where that has to show up.
+                    "semantic": result["coverage"].get("semantic"),
                     "top": top,
                     "n_fragments": len(result["fragments"]),
                 }, ensure_ascii=False) + "\n")
