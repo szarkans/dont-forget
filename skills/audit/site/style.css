@@ -177,6 +177,12 @@ h1 {
 .rows li.on .row-more { display: block; }
 .row-more .ver p { font-size: .86rem; color: #c9cde0; }
 .row-meta { font-family: var(--font-mono); font-size: .74rem; color: var(--muted); white-space: nowrap; padding-top: 2px; }
+/* A badge can quote a whole godnote title, so it takes its own line above the title at every width:
+   beside the title it squeezed the text into a column and pushed the page wider than the screen */
+.rows li { grid-template-columns: 34px minmax(0, 1fr); row-gap: 4px; }
+.rows li .row-dots { grid-row: 1 / 3; }
+.rows li .row-meta { grid-column: 2; grid-row: 1; padding-top: 0; white-space: normal; min-width: 0; }
+.rows li .row-meta .pill { display: inline-block; max-width: 100%; border-radius: 10px; }
 
 /* Decisions: hidden until the db answers, so a page without storage shows no dead buttons */
 .mark { display: none; gap: 6px; }
@@ -208,10 +214,6 @@ h1 {
 .decided span:empty { display: none; }
 
 @media (max-width: 860px) {
-  /* The badge takes its own line above the title, so the text and the mark buttons get the full width */
-  .rows li { grid-template-columns: 34px minmax(0, 1fr); row-gap: 4px; }
-  .rows li .row-dots { grid-row: 1 / 3; }
-  .rows li .row-meta { grid-column: 2; grid-row: 1; padding-top: 0; }
   .rows li .row-main { grid-column: 2; grid-row: 2; }
   .hero::after { background: linear-gradient(0deg, rgba(11,14,26,.97) 0%, rgba(11,14,26,.9) 48%, rgba(11,14,26,.15) 80%); }
   .story { grid-template-columns: 1fr; gap: 0; }
