@@ -266,7 +266,10 @@ def hook_payload(payload: dict) -> dict:
         # in the words the error already carries.
         lines.append(payload["index_error"])
     context = "\n".join(lines)
+    # additionalContext reaches only the model. The user gets the same text, or they
+    # cannot tell a stale thread from one the model made up.
     return {
+        "systemMessage": context,
         "hookSpecificOutput": {
             "hookEventName": "SessionStart",
             "additionalContext": context,

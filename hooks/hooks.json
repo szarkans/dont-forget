@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/hot-scan.py\" --hook",
+            "command": "[ \"${DONT_FORGET_HOOKS:-1}\" = 0 ] || python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/hot-scan.py\" --hook",
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/context-guard.py\"",
+            "command": "[ \"${DONT_FORGET_HOOKS:-1}\" = 0 ] || python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/context-guard.py\"",
             "timeout": 10
           }
         ]

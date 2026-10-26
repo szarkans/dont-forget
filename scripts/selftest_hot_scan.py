@@ -201,6 +201,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "Open threads — these die when you do them:" in context
     assert "Gotchas — these describe how things are, nothing to do:" in context
     assert "- [ ] a real thread (Session — Fenced)" in context
+    # The user sees the same digest the model does, so they can tell why it acted as it did.
+    assert hook.get("systemMessage") == context, hook.get("systemMessage")
 
     # Godnotes: the project's own pages by name, no unfiled and no foreign ones; every one
     # of them when unscoped. They are the first list cut when the budget bites.
