@@ -4,9 +4,11 @@
 import _selftest_env  # noqa: F401
 
 import json
+import os
 import runpy
 import sqlite3
 import subprocess
+import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
@@ -14,6 +16,7 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("hot-scan.py")
 HOT_SCAN = runpy.run_path(str(SCRIPT))
+ENV: dict[str, str] | None = None
 
 
 SCHEMA = """
@@ -29,12 +32,19 @@ def invoke(db: Path, *args: str) -> tuple[dict, bytes]:
         ["python3", str(SCRIPT), "--db", str(db), *args],
         check=True,
         capture_output=True,
+        env=ENV,
     )
     return json.loads(result.stdout), result.stdout
 
 
 with tempfile.TemporaryDirectory() as tmp:
     root = Path(tmp)
+    # hot-scan reads the live ~/.claude/projects through unclosed.scan(); point both the
+    # in-process module and every subprocess at an empty home of their own.
+    empty_home = root / "home"
+    empty_home.mkdir()
+    ENV = {**os.environ, "HOME": str(empty_home)}
+    sys.modules["unclosed"].PROJECTS = empty_home / ".claude" / "projects"
     db = root / "index.db"
     con = sqlite3.connect(db)
     con.executescript(SCHEMA)
@@ -127,7 +137,8 @@ with tempfile.TemporaryDirectory() as tmp:
     (config_home / "config.json").write_text(json.dumps({"vault": "/nowhere", "hot_tails": 1, "hot_gotchas": 2}))
     configured = subprocess.run(
         ["python3", str(SCRIPT), "--db", str(db), "--project", ""],
-        check=True, capture_output=True, env={"PATH": "/usr/bin:/bin", "DONT_FORGET_HOME": str(config_home)},
+        check=True, capture_output=True, env={**ENV, "PATH": "/usr/bin:/bin",
+                                              "DONT_FORGET_HOME": str(config_home)},
     )
     configured_payload = json.loads(configured.stdout)
     assert len(configured_payload["tails"]) == 1, configured_payload

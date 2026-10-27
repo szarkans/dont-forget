@@ -31,6 +31,11 @@ keep every disagreement visible — two readers of two pieces see different thin
 why it was split rather than duplicated. If no transcript is found, audit it yourself and
 say plainly that this is the weaker check.
 
+A session that ended before the skill ran shows up in the startup digest and in
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/unclosed.py" --list`. Audit it the same way: take
+its path from there and run `transcript.py --path <path>`, which also records the session
+as closed so the digest stops offering it.
+
 **The checklist for each reader:** which requests were completed and which were not; which
 decisions were made and whether they were saved; commits, pull requests and anything
 changed outside this repository; TODO/later/FIXME left in the conversation or the code;
