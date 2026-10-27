@@ -24,6 +24,8 @@ import os
 import sys
 from pathlib import Path
 
+from unclosed import record_pending
+
 PROJECTS = Path.home() / ".claude" / "projects"
 # Above this many characters of conversation, one reader is being asked to hold too much —
 # which is the very problem this exists to avoid.
@@ -171,6 +173,12 @@ def main() -> None:
             raise SystemExit(f"piece {args.piece} of {len(pieces)}: out of range")
         print(render(pieces[args.piece - 1]))
         return
+    if args.path:
+        try:
+            record_pending(path)
+        except OSError as error:
+            print(f"dont-forget: could not record the session as closing: {error}",
+                  file=sys.stderr)
     print(json.dumps({
         "path": str(path),
         "pieces": len(pieces),

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from common import DEFAULT_DB, config, vault_from_config
 from secret_scan import warning
+from unclosed import close_pending
 
 try:
     import fcntl
@@ -183,6 +184,14 @@ def similar_notes(vault: Path, db_path: Path, filename: str, content: str,
     return out
 
 
+def session_note(content: str) -> bool:
+    """Whether this note is a session snapshot — the write that closes a pending session."""
+    from index import parse_frontmatter
+
+    meta, _ = parse_frontmatter(content)
+    return str(meta.get("type", "")).strip().lower() == "session"
+
+
 def locate(vault: Path, filename: str, content: str = "") -> Path:
     """Where this note lives, or where a new one goes.
 
@@ -288,6 +297,14 @@ def main() -> None:
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(2) from error
+    # The note is the closure: a summary read only marks a session as closing, so an
+    # abandoned audit leaves it in the digest. Bookkeeping never unsaves a written note.
+    if wrote and session_note(content):
+        try:
+            close_pending()
+        except OSError as error:
+            print(f"dont-forget: could not record the session as closed: {error}",
+                  file=sys.stderr)
     result = {"status": status}
     if status == "rejected":
         result["problems"] = problems
