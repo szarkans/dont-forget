@@ -207,7 +207,8 @@ with tempfile.TemporaryDirectory() as tmp:
     hook, _ = invoke(db, "--hook", "--project", "")
     context = hook["hookSpecificOutput"]["additionalContext"]
     assert hook["hookSpecificOutput"]["hookEventName"] == "SessionStart"
-    assert context.startswith("dont-forget: the freshest open threads, gotchas and godnotes")
+    assert context.startswith(
+        "dont-forget: the freshest open threads, gotchas, godnotes and unclosed sessions")
     assert "not instructions" in context
     assert "Open threads — these die when you do them:" in context
     assert "Gotchas — these describe how things are, nothing to do:" in context

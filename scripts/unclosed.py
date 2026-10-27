@@ -16,6 +16,7 @@ import argparse
 import datetime
 import json
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from common import HOME_DIR
 
 PROJECTS = Path.home() / ".claude" / "projects"
 CACHE = HOME_DIR / "unclosed-cache.json"
+CLOSING = HOME_DIR / "closing-sessions.jsonl"
 CLOSED = HOME_DIR / "closed-sessions.jsonl"
 DISMISSED = HOME_DIR / "unclosed-dismissed.jsonl"
 
@@ -42,7 +44,7 @@ def _recorded(log: Path) -> set[str]:
     """Session ids already logged in an append-only file. A broken line loses itself only."""
     ids = set()
     try:
-        with log.open(encoding="utf-8") as handle:
+        with log.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 try:
                     ids.add(json.loads(line)["session_id"])
@@ -51,6 +53,67 @@ def _recorded(log: Path) -> set[str]:
     except OSError:
         pass
     return ids
+
+
+def record_pending(path: Path, log: Path = CLOSING) -> None:
+    """Note that this transcript is being audited; the session note is what closes it.
+
+    A summary read can be abandoned halfway, so `--path` records a pending entry only.
+    A write of a `type: session` note moves every pending entry to closed-sessions.jsonl.
+    """
+    session_id = path.stem
+    if session_id in _recorded(CLOSED) or session_id in _recorded(log):
+        return
+    entry = {"session_id": session_id, "path": str(path),
+             "ts": datetime.datetime.now().isoformat(timespec="seconds")}
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def close_pending(pending_log: Path = CLOSING, closed_log: Path = CLOSED) -> None:
+    """Move audited sessions into the closed log once their session note is written.
+
+    The move is all-or-nothing: the pending file is emptied only after every readable
+    entry has been appended, so a failed append leaves the work offerable again.
+    """
+    try:
+        lines = pending_log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except FileNotFoundError:
+        return
+    known, entries = _recorded(closed_log), []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict) or not entry.get("session_id"):
+            continue
+        if entry["session_id"] in known:
+            continue
+        known.add(entry["session_id"])
+        entries.append(entry)
+    if entries:
+        closed_log.parent.mkdir(parents=True, exist_ok=True)
+        with closed_log.open("a", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    pending_log.write_text("", encoding="utf-8")
+
+
+def _user_text(content) -> str | None:
+    """The words a user turn carries, whether written as a string or as content blocks.
+
+    None means the entry carries no words at all — a tool result or an attachment —
+    and is no user turn, however it is shaped.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    texts = [block.get("text", "") for block in content
+             if isinstance(block, dict) and block.get("type") == "text"]
+    return "\n".join(texts) if texts else None
 
 
 def facts(path: Path) -> dict:
@@ -78,20 +141,21 @@ def facts(path: Path) -> dict:
             if entry.get("type") == "user":
                 found["cwd"] = found["cwd"] or entry.get("cwd") or ""
                 found["entrypoint"] = found["entrypoint"] or entry.get("entrypoint") or ""
-                if not isinstance(content, str):
+                text = _user_text(content)
+                if text is None:
                     continue
-                if CLOSE_COMMAND in content:
+                if CLOSE_COMMAND in text:
                     found["closed"] = True
-                elif not entry.get("isMeta") and not content.startswith("<"):
+                elif not entry.get("isMeta") and not text.startswith("<"):
                     found["user_turns"] += 1
                     if not found["first_message"]:
-                        found["first_message"] = " ".join(content.split())[:MESSAGE_CHARS]
+                        found["first_message"] = " ".join(text.split())[:MESSAGE_CHARS]
             elif maybe_skill and entry.get("type") == "assistant":
                 for block in content if isinstance(content, list) else []:
                     if not isinstance(block, dict) or block.get("type") != "tool_use":
                         continue
-                    if block.get("name") == "Skill" and CLOSE_SKILL in json.dumps(
-                            block.get("input") or {}, ensure_ascii=False):
+                    arguments = block.get("input") if isinstance(block.get("input"), dict) else {}
+                    if block.get("name") == "Skill" and arguments.get("skill") == CLOSE_SKILL:
                         found["closed"] = True
     return found
 
@@ -108,23 +172,39 @@ def _load_cache(path: Path = CACHE) -> dict:
 
 
 def _save_cache(files: dict, path: Path = CACHE) -> None:
+    temporary = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"version": CACHE_VERSION, "files": files},
-                                   ensure_ascii=False), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".unclosed-",
+                                         delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps({"version": CACHE_VERSION, "files": files},
+                                    ensure_ascii=False).encode("utf-8"))
+        os.replace(temporary, path)
     except OSError:
         pass
+    finally:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
-def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = None) -> list[dict]:
+def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = None,
+         stats: dict | None = None) -> list[dict]:
     """Unclosed interactive sessions of the window, newest first.
 
     A cache per path keyed by (mtime, size) is what keeps the startup digest inside its
     ten seconds: transcripts change on every tool call, so anything finer would be cold
     every time, and anything coarser would keep reading files that have not moved.
-    `seconds` caps the reading on a cold cache; what is left is read on the next start.
+    `seconds` caps the reading on a cold cache; what is left is read on the next start,
+    and `stats["unscanned"]` says how many files that cap skipped, so a short list is
+    never mistaken for the whole one.
     """
     root = root or PROJECTS
+    if stats is not None:
+        stats["unscanned"] = 0
     now = time.time()
     cutoff = now - days * 86400
     current = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
@@ -145,6 +225,8 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
         entry = cache.get(key)
         if not (entry and entry.get("mtime") == stat.st_mtime and entry.get("size") == stat.st_size):
             if deadline is not None and time.time() > deadline:
+                if stats is not None:
+                    stats["unscanned"] += 1
                 continue
             try:
                 entry = facts(path)

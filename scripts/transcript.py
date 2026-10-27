@@ -19,16 +19,14 @@ equal pieces by size.
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
 import os
 import sys
 from pathlib import Path
 
-from common import HOME_DIR
+from unclosed import record_pending
 
 PROJECTS = Path.home() / ".claude" / "projects"
-CLOSED_LOG = HOME_DIR / "closed-sessions.jsonl"
 # Above this many characters of conversation, one reader is being asked to hold too much —
 # which is the very problem this exists to avoid.
 SPLIT_ABOVE = 120_000
@@ -159,34 +157,6 @@ def render(piece: list[dict]) -> str:
     return "\n\n".join(f"[{turn['role']}]\n{turn['text']}" for turn in piece)
 
 
-def record_closed(path: Path) -> None:
-    """Mark this session as closed, so a later digest stops offering it.
-
-    Closure can come from another session — that is what `--path` is for — so it cannot
-    live in the transcript's own file. Reading before appending keeps a repeated summary
-    from piling up duplicate lines.
-    """
-    session_id = path.stem
-    try:
-        existing = CLOSED_LOG.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        existing = []
-    for line in existing:
-        try:
-            if json.loads(line).get("session_id") == session_id:
-                return
-        except (json.JSONDecodeError, AttributeError):
-            continue
-    entry = {"session_id": session_id, "path": str(path),
-             "ts": datetime.datetime.now().isoformat(timespec="seconds")}
-    try:
-        CLOSED_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with CLOSED_LOG.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except OSError as error:
-        print(f"dont-forget: could not record the session as closed: {error}", file=sys.stderr)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", type=Path, help="a transcript file; default is this session's newest")
@@ -203,7 +173,12 @@ def main() -> None:
             raise SystemExit(f"piece {args.piece} of {len(pieces)}: out of range")
         print(render(pieces[args.piece - 1]))
         return
-    record_closed(path)
+    if args.path:
+        try:
+            record_pending(path)
+        except OSError as error:
+            print(f"dont-forget: could not record the session as closing: {error}",
+                  file=sys.stderr)
     print(json.dumps({
         "path": str(path),
         "pieces": len(pieces),

@@ -65,7 +65,7 @@ def closed_keys(log_path: Path = CLOSED_LOG) -> set[str]:
     """
     keys = set()
     try:
-        with log_path.open(encoding="utf-8") as handle:
+        with log_path.open(encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 if not line.strip():
                     continue
