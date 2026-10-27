@@ -57,6 +57,7 @@ with tempfile.TemporaryDirectory() as temp:
     assert missing_model["coverage"]["semantic"].startswith("off: model unavailable:"), missing_model
 
     with patch.object(semantic, "VENV_PYTHON", Path(sys.executable)), \
+            patch.dict(os.environ, {"DONT_FORGET_WARM": "0"}), \
             patch.object(semantic.subprocess, "run", side_effect=subprocess.TimeoutExpired("worker", 1)):
         assert semantic.run(db, "bird crisp")["semantic"] == "off: timeout"
 

@@ -395,6 +395,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
         return {"fragments": [], "coverage": {"matched_chunks": 0, "returned": 0,
                 "returned_leads": 0, "dropped_by_budget": 0, "weak_match": False,
                 "semantic": "off: empty query" if semantic else "off: word-only",
+                "semantic_worker": None,
                 "semantic_pool_examined": 0, "semantic_best_cosine": 0,
                 "semantic_embedded_chunks": 0, "semantic_total_chunks": 0,
                 "returned_by_meaning": 0,
@@ -461,6 +462,7 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
             answer_fragments = result["fragments"]
         result["coverage"]["weak_match"] = not _supports_answer(text_supported, answer_fragments)
         result["coverage"]["semantic"] = semantic_result["semantic"]
+        result["coverage"]["semantic_worker"] = semantic_result.get("worker")
         if semantic_result.get("old_vector_files"):
             result["coverage"]["semantic_old_vector_files"] = semantic_result["old_vector_files"]
         if semantic_result["semantic"].startswith("partial:"):
