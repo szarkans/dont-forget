@@ -3,18 +3,22 @@
 
 from __future__ import annotations
 
+import argparse
 import array
+import fcntl
 import hashlib
 import json
 import math
 import os
+import signal
+import socket
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
 from common import connect_ro
-from semantic import MODEL_ID, MODEL_REVISION, stub_enabled
+from semantic import MODEL_ID, MODEL_REVISION, code_identity, stub_enabled
 
 
 def stub_vector(text: str) -> list[float]:
@@ -158,7 +162,88 @@ def execute(request: dict, encoder=None) -> dict:
         index.close()
 
 
+def _answer(connection: socket.socket, encoder, code: str) -> dict | None:
+    """One request in, one reply out; a bad request must not kill the loop."""
+    try:
+        connection.settimeout(5)
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = connection.recv(1 << 16)
+            if not chunk:
+                break
+            data += chunk
+        if not data.strip():
+            return None
+        request = json.loads(data)
+        if request.get("code") != code:
+            return {"semantic": "off: stale server"}
+        return execute(request, encoder)
+    except Exception as error:  # noqa: BLE001 - the loop outlives any one request
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        return {"semantic": f"off: {type(error).__name__}"}
+
+
+def serve(socket_path: Path, idle_hours: float) -> None:
+    """Keep the encoder loaded and answer one JSON request per connection."""
+    lock_path = Path(f"{socket_path}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = lock_path.open("a+")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return  # another server already owns this socket
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    encoder = StubEncoder() if stub_enabled() else ModelEncoder()
+    # What this process is; a client built from newer code retires it.
+    code = code_identity()
+    socket_path.unlink(missing_ok=True)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    old_umask = os.umask(0o077)
+    try:
+        listener.bind(str(socket_path))
+    finally:
+        os.umask(old_umask)
+    os.chmod(socket_path, 0o600)
+    listener.listen(8)
+    idle_seconds = max(1.0, idle_hours * 3600)
+    deadline = time.monotonic() + idle_seconds
+    # Wake periodically so a home directory that has been removed ends the server.
+    listener.settimeout(min(60.0, idle_seconds))
+    try:
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except TimeoutError:
+                if time.monotonic() >= deadline or not socket_path.exists():
+                    break
+                continue
+            deadline = time.monotonic() + idle_seconds
+            with connection:
+                reply = _answer(connection, encoder, code)
+                if reply is not None:
+                    try:
+                        connection.sendall((json.dumps(reply) + "\n").encode())
+                    except OSError:
+                        pass
+                if reply is not None and reply["semantic"] == "off: stale server":
+                    break
+    finally:
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+
+
 def main() -> None:
+    if "--serve" in sys.argv[1:]:
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--serve", type=Path, required=True)
+        parser.add_argument("--idle-hours", type=float, default=12)
+        args = parser.parse_args()
+        serve(args.serve, args.idle_hours)
+        return
     print(json.dumps(execute(json.load(sys.stdin))))
 
 
