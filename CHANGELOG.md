@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.17.0 — 2026-10-27
+
+### Added
+- The session-start digest lists sessions that ended without `/dont-forget:session`, newest
+  first, with the path to pass to `transcript.py --path`; `scripts/unclosed.py --list` shows
+  all of them and `--dismiss` hides one.
+  - Why: in 14 days 91 of ~137 interactive sessions were never closed, so their gotchas
+    never reached the vault.
+  - A session counts as closed only once its session note is written, not when the audit starts.
+- Search keeps the embedding model loaded in a background process; a search drops from
+  ~8 s to ~1.2 s. It holds ~2 GB of RAM, exits after 12 idle hours or when the plugin
+  updates, and `DONT_FORGET_WARM=0` turns it off.
+  - Why: every search paid the model load again.
+
 ## 0.16.0 — 2026-10-26
 
 ### Added
