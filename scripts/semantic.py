@@ -29,6 +29,13 @@ def vector_db_path(db_path: Path) -> Path:
     return db_path.with_name(f"{db_path.name}.{VECTOR_SUFFIX}")
 
 
+def code_identity() -> str:
+    """Model plus the code mtimes, so a server left over from an update cannot answer."""
+    mtimes = [Path(__file__).with_name(name).stat().st_mtime_ns
+              for name in ("semantic.py", "semantic_worker.py", "common.py")]
+    return ":".join([MODEL_ID, MODEL_REVISION, *(str(value) for value in mtimes)])
+
+
 def stub_enabled() -> bool:
     """A test encoder requires an explicitly isolated home and a test opt-in."""
     home = os.environ.get("DONT_FORGET_HOME")
@@ -39,13 +46,15 @@ def stub_enabled() -> bool:
 
 def _warm(request: dict) -> tuple[dict | None, str | None]:
     """Ask the resident server; (None, None) means nobody is listening."""
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client = None
     try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         client.settimeout(WARM_CONNECT_SECONDS)
         client.connect(str(WARM_SOCKET))
     except OSError:
         # Missing, refused or stale socket file all mean "no server running".
-        client.close()
+        if client is not None:
+            client.close()
         return None, None
     try:
         client.settimeout(WARM_READ_SECONDS)
@@ -99,9 +108,10 @@ def run(db_path: Path, query: str | None = None, full: bool = False) -> dict:
             return finish({"semantic": "off: no venv"})
         if not WORKER.is_file():
             return finish({"semantic": "off: no worker"})
-        request = {"db": str(db_path), "vectors_db": str(vector_db_path(db_path)),
+        request = {"db": str(db_path.resolve()),
+                   "vectors_db": str(vector_db_path(db_path).resolve()),
                    "query": query, "full": full,
-                   "limit": SEARCH_EMBED_LIMIT}
+                   "limit": SEARCH_EMBED_LIMIT, "code": code_identity()}
         worker = "cold"
         if not full and os.environ.get("DONT_FORGET_WARM") != "0":
             reply, reason = _warm(request)
@@ -110,6 +120,9 @@ def run(db_path: Path, query: str | None = None, full: bool = False) -> dict:
             if reply is not None:
                 # The server answered, but with a refusal: retry one-shot and say why.
                 reason = str(reply["semantic"]).removeprefix("off: ")[:120]
+                if reason == "stale server":
+                    # It is about to exit anyway: answer cold and start a fresh one.
+                    reason = None
             if reason is None:
                 _start_server(python)
             else:
