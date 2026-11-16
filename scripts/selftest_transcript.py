@@ -31,7 +31,9 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-transcript-") as tmp:
         json.dumps({"type": "attachment", "content": "x" * 5000}),
         json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": "We decided to block deploys without migrations."},
-            {"type": "tool_use", "name": "Bash", "input": {"command": "git log"}}]}}),
+            {"type": "tool_use", "name": "Bash", "input": {"command": "git log"}},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+             "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}]}}),
         json.dumps({"type": "system", "content": "hook fired"}),
         json.dumps({"type": "assistant", "message": {"content": []}}),
         "not json at all",
@@ -47,6 +49,11 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-transcript-") as tmp:
     assert "git log" in conversation[1]["text"], conversation[1]
     assert "used Bash" in conversation[1]["text"], conversation[1]
     assert "xxxx" not in render(conversation), "attachments must not reach the reader"
+    # An image survives as a path a reader can open: inline payloads are dumped
+    # next to the snapshots, named by content hash.
+    marker = next(line for line in conversation[1]["text"].splitlines()
+                  if line.startswith("<image:"))
+    assert Path(marker[len("<image: "):-1]).is_file(), marker
 
     # A short session goes to one reader whole.
     assert len(split(conversation, limit=10_000)) == 1

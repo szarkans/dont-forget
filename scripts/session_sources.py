@@ -12,6 +12,8 @@ fields, and an ambiguous set is reported as unknown instead of resolved by prior
 from __future__ import annotations
 
 import ast
+import base64
+import hashlib
 import json
 import os
 import shutil
@@ -280,6 +282,66 @@ def read_db(path: Path | None = None):
         connection.close()
 
 
+_IMAGE_TYPES = ("image", "input_image", "image_url", "attachment")
+
+
+def audit_images_dir() -> Path:
+    """Where inline image payloads are dumped for readers, beside the snapshots."""
+    return Path(os.environ.get("DONT_FORGET_HOME") or Path.home() / ".dont-forget") \
+        / "audit-transcripts/images"
+
+
+def image_reference(part: dict) -> str | None:
+    """A filesystem path for an image part: the one it names, or one it is dumped to.
+
+    Stores carry images three ways: a path on disk (OMP/Devin paste files), a
+    `data:` URL (Codex input_image), or inline base64 (Claude image blocks). The
+    reader gets a stable path either way — existing files stay where they are,
+    inline payloads land in the audit dir named by content hash, so repeats of
+    the same screenshot do not multiply.
+    """
+    if not isinstance(part, dict):
+        return None
+    source = part.get("source") if isinstance(part.get("source"), dict) else {}
+    named = (part.get("path") or part.get("filePath") or part.get("filename")
+             or part.get("file") or source.get("path"))
+    url = part.get("image_url")
+    if isinstance(url, dict):
+        url = url.get("url")
+    url = url or part.get("url")
+    for candidate in (named, url):
+        if isinstance(candidate, str) and candidate.startswith("/") \
+                and Path(candidate).is_file():
+            return candidate
+    media = source.get("media_type") or part.get("media_type") or part.get("mimeType")
+    data = source.get("data") or part.get("data")
+    if isinstance(url, str) and url.startswith("data:"):
+        head, _, payload = url.partition(",")
+        data = payload
+        media = media or head.removeprefix("data:").split(";")[0]
+    if not isinstance(data, str) or not data:
+        return None
+    try:
+        raw = base64.b64decode(data)
+    except (ValueError, TypeError):
+        return None
+    ext = {"image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif",
+           "image/webp": "webp", "image/svg+xml": "svg"}.get(media or "", "png")
+    path = audit_images_dir() / f"{hashlib.sha256(raw).hexdigest()[:16]}.{ext}"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_bytes(raw)
+    except OSError:
+        return None
+    return str(path)
+
+
+def image_line(part: dict) -> str:
+    path = image_reference(part)
+    return f"<image: {path}>" if path else "<attached image>"
+
+
 def text_parts(parts) -> str:
     if isinstance(parts, str):
         return parts
@@ -295,6 +357,8 @@ def text_parts(parts) -> str:
             state = part.get("state") or {}
             args = part.get("input", part.get("args", part.get("arguments", state.get("input", {}))))
             lines.append(tool_line(part.get("tool", part.get("name", part.get("toolName", "tool"))), args))
+        elif kind in _IMAGE_TYPES:
+            lines.append(image_line(part))
     return "\n".join(lines)
 
 
@@ -958,6 +1022,8 @@ def _devin_message_text(message: dict) -> str:
         for part in content:
             if isinstance(part, dict) and part.get("type") in ("text", "input_text", "output_text"):
                 out.append(part.get("text", ""))
+            elif isinstance(part, dict) and part.get("type") in _IMAGE_TYPES:
+                out.append(image_line(part))
             elif isinstance(part, str):
                 out.append(part)
     out.extend(_devin_tool_calls(message.get("tool_calls")))

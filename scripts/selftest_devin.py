@@ -80,7 +80,10 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
         # A sibling branch off the root that the main chain must not include.
         (8, 2, {"role": "user", "content": "SIDE BRANCH off the chain",
                 "metadata": {"is_user_input": True}}),
-        (9, 7, {"role": "user", "content": "DEVIN question three",
+        (9, 7, {"role": "user", "content": [
+                    {"type": "text", "text": "DEVIN question three"},
+                    {"type": "image_url", "image_url": {
+                        "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}],
                 "metadata": {"is_user_input": True}}),
         (10, 9, {"role": "assistant", "content": "DEVIN tail"}),
     ]
@@ -108,6 +111,10 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
     assert any("git log" in t for t in texts), texts
     joined = "\n".join(texts)
     assert "PRIVATE" not in joined and "SIDE BRANCH" not in joined, joined
+    # The image part arrives as a path marker the reader can open: the data: URL
+    # is dumped next to the snapshots, named by content hash.
+    marker = next(line for line in joined.splitlines() if line.startswith("<image:"))
+    assert Path(marker[len("<image: "):-1]).is_file(), marker
 
     # The CLI resolves the same id, freezes a snapshot and records the audit id.
     env = {**os.environ, "CHISEL_SESSION_DB": str(db)}

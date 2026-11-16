@@ -46,8 +46,10 @@ closing; it is recorded as closed when the session note is written.
 decisions were made and whether they were saved; commits, pull requests and anything
 changed outside this repository; TODO/later/FIXME left in the conversation or the code;
 errors that were never resolved; questions that were never answered; code-bound "never X"
-/ "always Y" rules that belong in the repository rules. Then `git log --oneline -15` and
-`git status --short`, and no claim that outruns them.
+/ "always Y" rules that belong in the repository rules. `<used name: args>` lines are
+tool calls; `<image: path>` lines are attachments you may open when the picture itself
+carries the evidence. Then `git log --oneline -15` and `git status --short`, and no
+claim that outruns them.
 
 ## Present the candidates
 
