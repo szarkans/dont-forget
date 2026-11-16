@@ -186,7 +186,7 @@ document.querySelectorAll('.expandall').forEach(btn => {{
 def render(opened, closed_rows):
     groups = defaultdict(list)
     for row in opened:
-        groups[row["project"]].append(row)
+        groups[hot_scan.canonical_project(row["project"]) or row["project"]].append(row)
     # BTS is finished work: its backlog parks at the bottom instead of evicting it.
     ordered = sorted(groups, key=lambda p: ("bts" in p.lower(), -len(groups[p]), p))
     blocks = []

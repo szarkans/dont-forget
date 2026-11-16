@@ -12,7 +12,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
-from common import DEFAULT_DB, config_count, connect_ro
+from common import DEFAULT_DB, config, config_count, connect_ro
 from index import refresh_index, strip_fences
 from session_sources import record_session_map, validate_session_id
 from threads import closed_keys, key as thread_key
@@ -73,6 +73,37 @@ def normalize(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
+_ALIASES: dict | None = None
+
+
+def canonical_project(name: str) -> str:
+    """The one name a project goes by after normalisation and declared aliases.
+
+    Renaming a repository mints a new project string while every older note keeps the
+    old one — 'aimi' and 'medtech-second-brain' are the same work wearing two names.
+    `project_aliases` in config.json declares the equivalence instead of guessing at
+    spelling: {"canonical": ["old-name", "other-spelling"]}.
+    """
+    global _ALIASES
+    norm = normalize(name or "")
+    if not norm:
+        return ""
+    if _ALIASES is None:
+        _ALIASES = {}
+        raw = config().get("project_aliases", {})
+        if isinstance(raw, dict):
+            for canon, names in raw.items():
+                canon = normalize(str(canon))
+                if not canon:
+                    continue
+                _ALIASES[canon] = canon
+                for alias in names if isinstance(names, list) else [names]:
+                    alt = normalize(str(alias))
+                    if alt:
+                        _ALIASES[alt] = canon
+    return _ALIASES.get(norm, norm)
+
+
 def same_project(note_project: str, project: str) -> bool:
     """One project, one name — once case and separators are normalised away.
 
@@ -81,8 +112,8 @@ def same_project(note_project: str, project: str) -> bool:
     it), while every real pair of spellings differed by case or separator only. A project
     that does want a neighbour's notes needs an explicit alias, not a guess at spelling.
     """
-    note_project = normalize(note_project or "")
-    project = normalize(project or "")
+    note_project = canonical_project(note_project)
+    project = canonical_project(project)
     return bool(note_project) and note_project == project
 
 
