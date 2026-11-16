@@ -52,10 +52,9 @@ def open_threads(db_path):
         text = hot_scan.strip_fences("\n".join(by_note.get(note["id"], [])))
         for match in hot_scan.OPEN_ITEM.finditer(text):
             item = " ".join(match.group(0).strip()[2:].split())
-            if len(item) > hot_scan.MAX_ITEM_CHARS:
-                item = item[: hot_scan.MAX_ITEM_CHARS - 1] + "…"
-            line = f"{item} (Session — {name})"
-            if thread_key(line) in closed:
+            short = item if len(item) <= hot_scan.MAX_ITEM_CHARS \
+                else item[: hot_scan.MAX_ITEM_CHARS - 1] + "…"
+            if thread_key(f"{short} (Session — {name})") in closed:
                 continue
             found.append({"text": item, "session": name,
                           "project": note["project"] or "—",
@@ -94,8 +93,13 @@ PAGE = """<!doctype html>
        background:var(--panel); border:1px solid var(--line); border-radius:8px;
        color:var(--fg); font-size:14px; outline:none; }}
   #q:focus {{ border-color:var(--accent); }}
+  nav.toc {{ display:flex; flex-wrap:wrap; gap:8px; padding:14px 32px 4px; }}
+  nav.toc a {{ padding:4px 12px; background:var(--panel); border:1px solid var(--line);
+              border-radius:999px; color:var(--fg); text-decoration:none; font-size:12px; }}
+  nav.toc a:hover {{ border-color:var(--accent); color:var(--accent); }}
+  nav.toc a .n {{ color:var(--dim); margin-left:5px; }}
   main {{ padding:8px 32px 60px; max-width:1200px; }}
-  section {{ margin-top:26px; }}
+  section {{ margin-top:26px; scroll-margin-top:150px; }}
   h2 {{ font-size:14px; font-weight:600; color:var(--accent); margin:0 0 8px;
        text-transform:uppercase; letter-spacing:.04em; }}
   h2 .n {{ color:var(--dim); font-weight:400; margin-left:6px; }}
@@ -108,6 +112,17 @@ PAGE = """<!doctype html>
   tr:last-child td {{ border-bottom:none; }}
   tr:hover td {{ background:rgba(88,166,255,.04); }}
   .t {{ font-family:ui-monospace, "SF Mono", Menlo, monospace; font-size:13px; }}
+  .t .clamped {{ display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical;
+                overflow:hidden; }}
+  .more {{ display:inline-block; margin-top:2px; color:var(--accent); font-size:11px;
+          cursor:pointer; }}
+  .more:hover {{ text-decoration:underline; }}
+  .expandall {{ margin:10px 0 0; padding:6px 16px; background:var(--panel);
+               border:1px solid var(--line); border-radius:8px; color:var(--accent);
+               font-size:12px; cursor:pointer; }}
+  .expandall:hover {{ border-color:var(--accent); }}
+  tr.extra {{ display:none; }}
+  section.expanded tr.extra {{ display:table-row; }}
   .s {{ color:var(--dim); white-space:nowrap; font-size:12px; }}
   .d {{ color:var(--dim); white-space:nowrap; font-size:12px; width:90px; }}
   details {{ margin-top:26px; }}
@@ -122,6 +137,7 @@ PAGE = """<!doctype html>
        <i>{closed_n}</i> closed · generated {when}</div>
   <input id="q" type="search" placeholder="filter threads…" autofocus>
 </header>
+<nav class="toc">{toc}</nav>
 <main>
 {body}
 {closed_section}
@@ -132,12 +148,36 @@ q.addEventListener('input', () => {{
   const needle = q.value.trim().toLowerCase();
   document.querySelectorAll('tbody tr').forEach(tr => {{
     const hit = !needle || tr.textContent.toLowerCase().includes(needle);
-    tr.style.display = hit ? '' : 'none';
+    tr.style.display = hit && (!tr.classList.contains('extra') ||
+                     tr.closest('section').classList.contains('expanded')) ? '' : 'none';
   }});
   document.querySelectorAll('section').forEach(sec => {{
     const any = [...sec.querySelectorAll('tbody tr')].some(tr => tr.style.display !== 'none');
     sec.style.display = any ? '' : 'none';
   }});
+}});
+document.querySelectorAll('.t .clamped').forEach(el => {{
+  if (el.scrollHeight > el.clientHeight + 2) {{
+    const b = document.createElement('span');
+    b.className = 'more'; b.textContent = 'раскрыть полностью';
+    b.onclick = () => {{ el.classList.remove('clamped'); b.remove(); }};
+    el.after(b);
+  }}
+}});
+document.querySelectorAll('.expandall').forEach(btn => {{
+  btn.onclick = () => {{
+    const sec = btn.closest('section');
+    sec.classList.toggle('expanded');
+    btn.textContent = sec.classList.contains('expanded')
+      ? 'свернуть' : btn.dataset.label;
+    if (!sec.classList.contains('expanded'))
+      sec.querySelectorAll('tr.extra').forEach(tr => tr.style.display = 'none');
+    else if (q.value.trim())
+      sec.querySelectorAll('tr.extra').forEach(tr => {{
+        if (tr.textContent.toLowerCase().includes(q.value.trim().toLowerCase()))
+          tr.style.display = '';
+      }});
+  }};
 }});
 </script>
 </body></html>"""
@@ -147,18 +187,30 @@ def render(opened, closed_rows):
     groups = defaultdict(list)
     for row in opened:
         groups[row["project"]].append(row)
+    # BTS is finished work: its backlog parks at the bottom instead of evicting it.
+    ordered = sorted(groups, key=lambda p: ("bts" in p.lower(), -len(groups[p]), p))
     blocks = []
-    for project in sorted(groups, key=lambda p: -len(groups[p])):
-        rows = "".join(
-            f"<tr><td class='t'>{html.escape(r['text'])}</td>"
-            f"<td class='s'>{html.escape(r['session'])}</td>"
-            f"<td class='d'>{html.escape(r['date'][:10])}</td></tr>"
-            for r in groups[project])
+    chips = []
+    for idx, project in enumerate(ordered):
+        rows_html = ""
+        for n, r in enumerate(groups[project]):
+            cls = " class='extra'" if n >= 12 else ""
+            rows_html += (
+                f"<tr{cls}><td class='t'><div class='clamped'>"
+                f"{html.escape(r['text'])}</div></td>"
+                f"<td class='s'>{html.escape(r['session'])}</td>"
+                f"<td class='d'>{html.escape(r['date'][:10])}</td></tr>")
+        count = len(groups[project])
+        expand = (f"<button class='expandall' "
+                  f"data-label='раскрыть все {count}'>раскрыть все {count}</button>"
+                  if count > 12 else "")
         blocks.append(
-            f"<section><h2>{html.escape(project)}"
-            f"<span class='n'>{len(groups[project])}</span></h2>"
+            f"<section id='p{idx}'><h2>{html.escape(project)}"
+            f"<span class='n'>{count}</span></h2>"
             f"<table><thead><tr><th>thread</th><th>session</th><th>date</th></tr>"
-            f"</thead><tbody>{rows}</tbody></table></section>")
+            f"</thead><tbody>{rows_html}</tbody></table>{expand}</section>")
+        chips.append(f"<a href='#p{idx}'>{html.escape(project)}"
+                     f"<span class='n'>{count}</span></a>")
     body = "\n".join(blocks) or "<p class='empty'>No open threads. Clean.</p>"
     closed_rows_html = "".join(
         f"<tr><td class='t'>{html.escape(r.get('thread',''))}</td>"
@@ -174,7 +226,7 @@ def render(opened, closed_rows):
     return PAGE.format(
         open_n=len(opened), proj_n=len(projects), closed_n=len(closed_rows),
         when=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-        body=body, closed_section=closed_section)
+        toc="".join(chips), body=body, closed_section=closed_section)
 
 
 def main():
