@@ -57,6 +57,7 @@ def open_threads(db_path):
             if thread_key(f"{short} (Session — {name})") in closed:
                 continue
             found.append({"text": item, "session": name,
+                          "line": f"{short} (Session — {name})",
                           "project": note["project"] or "—",
                           "date": note["date"] or ""})
     return found
