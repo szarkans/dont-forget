@@ -1,4 +1,4 @@
-"""Read local OMP, Claude, Codex and OpenCode conversations without changing their stores.
+"""Read local OMP, Claude, Codex, OpenCode and Devin conversations without changing their stores.
 
 File exports and live stores converge here. Only conversation text and bounded tool
 traces leave this module; reasoning, attachments and tool results stay in the source.
@@ -11,6 +11,7 @@ fields, and an ambiguous set is reported as unknown instead of resolved by prior
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
@@ -18,6 +19,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -44,6 +46,8 @@ def _native_identity(harness: str) -> str | None:
         if thread and session and thread != session:
             return None
         return thread or session or None
+    if harness == "devin":
+        return _devin_identity()
     return None
 
 
@@ -62,6 +66,9 @@ def _present_families() -> list[str]:
         present.append("codex")
     if _env("CLAUDE_CODE_SESSION_ID"):
         present.append("claude")
+    if _env("AI_AGENT").startswith("devin") or "CHISEL_SESSION_DB" in os.environ \
+            or "DEVIN_TRACEPARENT" in os.environ:
+        present.append("devin")
     return present
 
 
@@ -72,7 +79,7 @@ def active_session_identity(harness: str = "auto") -> tuple[str, str | None]:
     family: two families mean a foreign id was inherited and no answer is safe, while a
     single family with an empty id means the host is known but has no usable identity.
     """
-    if harness in ("claude", "codex", "opencode", "omp"):
+    if harness in ("claude", "codex", "opencode", "omp", "devin"):
         return harness, _native_identity(harness)
     present = _present_families()
     if len(present) != 1:
@@ -135,14 +142,15 @@ def opencode_db() -> Path:
 def validate_session_id(value: object) -> str:
     """A bookkeeping id is raw for Claude and namespaced for the other hosts."""
     problem = ("session_id must be a canonical id: raw Claude id or "
-               "omp:<id>, codex:<id>, opencode:<id>, without whitespace or paths")
+               "omp:<id>, codex:<id>, opencode:<id>, devin:<id>, without whitespace or paths")
     if (not isinstance(value, str) or not value
             or any(char.isspace() or ord(char) < 32 or ord(char) == 127
                    or char in "/\\" for char in value)):
         raise ValueError(problem)
     if ":" in value:
         harness, session_id = value.split(":", 1)
-        if harness not in ("omp", "codex", "opencode") or not session_id or ":" in session_id:
+        if harness not in ("omp", "codex", "opencode", "devin") \
+                or not session_id or ":" in session_id:
             raise ValueError(problem)
     return value
 
@@ -821,6 +829,309 @@ def opencode_sessions(cutoff: float, before: float, db_path: Path | None = None)
                                         "mtime": row["time_updated"] / 1000,
                                         "path": f"opencode://{row['id']}"}
     return list(found.values())
+
+
+# ---------------------------------------------------------------------------
+# Devin
+# ---------------------------------------------------------------------------
+
+def devin_root() -> Path:
+    return Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "devin/cli"
+
+
+def devin_state_db() -> Path:
+    """Devin's live session store; CHISEL_SESSION_DB is set inside every Devin session."""
+    configured = _env("CHISEL_SESSION_DB")
+    return Path(configured).expanduser() if configured else devin_root() / "sessions.db"
+
+
+def devin_transcripts() -> Path:
+    """ATIF transcript exports, one JSON per ended session."""
+    return devin_root() / "transcripts"
+
+
+def session_map_path(state: Path | None = None) -> Path:
+    root = state or Path(os.environ.get("DONT_FORGET_HOME") or Path.home() / ".dont-forget")
+    return root / "session-map.json"
+
+
+def record_session_map(harness: str, session_id: str, cwd: str,
+                       state: Path | None = None) -> None:
+    """Remember which session id a host started in a directory.
+
+    A hook learns its session id from stdin; the transcript reader later runs in a
+    process that has no such field, so the hook writes it down keyed by host and cwd.
+    Hosts with a native id variable never need this — it exists for Devin, which
+    advertises no session env of its own.
+    """
+    if not session_id or not isinstance(session_id, str):
+        return
+    path = session_map_path(state)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[f"{harness}:{cwd}"] = {"session_id": session_id, "harness": harness,
+                               "cwd": cwd, "ts": time.time()}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".session-map-",
+                                         delete=False, mode="w", encoding="utf-8") as handle:
+            temporary = Path(handle.name)
+            handle.write(json.dumps(data, ensure_ascii=False))
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def session_map_lookup(harness: str, cwd: str, state: Path | None = None) -> str | None:
+    try:
+        data = json.loads(session_map_path(state).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    entry = data.get(f"{harness}:{cwd}") if isinstance(data, dict) else None
+    if isinstance(entry, dict) and isinstance(entry.get("session_id"), str) \
+            and entry["session_id"]:
+        return entry["session_id"]
+    return None
+
+
+def _devin_identity() -> str | None:
+    """The running Devin session's id, from the hook's map or its own store's newest row."""
+    mapped = session_map_lookup("devin", str(Path.cwd().resolve()))
+    if mapped:
+        return mapped
+    cwd = str(Path.cwd().resolve())
+    try:
+        rows = devin_sessions(time.time() - 90 * 86400, time.time())
+    except (OSError, sqlite3.Error, ValueError):
+        return None
+    for row in rows:  # newest first
+        if row["cwd"] == cwd:
+            print("dont-forget: Devin session id came from the newest row for this"
+                  " directory, not the hook's session map", file=sys.stderr)
+            return row["session_id"]
+    return None
+
+
+def _devin_tool_calls(calls) -> list[str]:
+    """Bounded `<used name: args>` traces out of Devin's assistant tool_calls.
+
+    The live store writes tool_calls as a Python repr rather than JSON, so both
+    parsers are tried; a call that decodes as neither is dropped, not guessed at.
+    """
+    if isinstance(calls, str):
+        try:
+            calls = json.loads(calls)
+        except json.JSONDecodeError:
+            try:
+                calls = ast.literal_eval(calls)
+            except (ValueError, SyntaxError, MemoryError):
+                calls = []
+    lines = []
+    for call in calls if isinstance(calls, list) else []:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function") if isinstance(call.get("function"), dict) else call
+        name = function.get("name") or call.get("name") or "tool"
+        arguments = function.get("arguments", call.get("arguments", ""))
+        lines.append(tool_line(name, arguments))
+    return lines
+
+
+def _devin_message_text(message: dict) -> str:
+    """What one OpenAI-shaped chat row says, plus its tool-call traces.
+
+    `thinking` and `metadata` never leave the store: reasoning is private to the
+    session, and a tool result lives on its own `tool` row which is skipped too.
+    """
+    out = []
+    content = message.get("content")
+    if isinstance(content, str):
+        if content.strip():
+            out.append(content)
+    elif isinstance(content, list):
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in ("text", "input_text", "output_text"):
+                out.append(part.get("text", ""))
+            elif isinstance(part, str):
+                out.append(part)
+    out.extend(_devin_tool_calls(message.get("tool_calls")))
+    return "\n".join(out)
+
+
+def devin_export(data: dict, source: str) -> dict:
+    """An ATIF transcript export (`transcripts/<id>.json`) as a session dict."""
+    if not isinstance(data, dict) or not isinstance(data.get("steps"), list):
+        raise ValueError(f"not a Devin ATIF transcript: {source}")
+    session_id = data.get("session_id") or Path(str(source)).stem
+    agent = data.get("agent") if isinstance(data.get("agent"), dict) else {}
+    session = {"harness": "devin", "session_id": session_id,
+               "cwd": agent.get("cwd") or agent.get("working_directory") or "",
+               "entrypoint": "cli", "turns": [], "path": str(source)}
+    for step in data["steps"]:
+        if not isinstance(step, dict):
+            continue
+        source_kind = step.get("source")
+        message = step.get("message") if isinstance(step.get("message"), str) else ""
+        if source_kind == "user":
+            add_turn(session["turns"], "user", message)
+        elif source_kind == "agent":
+            parts = [message] if message.strip() else []
+            parts.extend(_devin_tool_calls(step.get("tool_calls")))
+            add_turn(session["turns"], "assistant", "\n".join(parts))
+        # system prompts, observations and compaction machinery stay in the file.
+    return session
+
+
+def devin_session(source, *, db_path: Path | None = None) -> dict:
+    """A Devin session: `devin://<id>`, a bare session id, or an ATIF file path.
+
+    The live store (`sessions.db` + `message_nodes`) is authoritative: it holds the
+    running session before any transcript is exported. A session id that has no row
+    falls back to its transcript export; a `.json` path is read as an export.
+    """
+    text = str(source)
+    if text.startswith("devin://"):
+        text = text[len("devin://"):]
+    candidate = Path(text)
+    if candidate.is_file() and candidate.suffix == ".json":
+        try:
+            return devin_export(json.loads(candidate.read_text(encoding="utf-8")), text)
+        except json.JSONDecodeError as error:
+            raise ValueError(f"malformed Devin transcript {candidate}: {error}") from error
+    db = db_path or devin_state_db()
+    if not db.is_file():
+        exported = devin_transcripts() / f"{text}.json"
+        if exported.is_file():
+            return devin_export(json.loads(exported.read_text(encoding="utf-8")),
+                                str(exported))
+        raise ValueError(f"no Devin session store at {db} and no transcript for {text}")
+    with read_db(db) as connection:
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"sessions", "message_nodes"} <= tables:
+            raise ValueError(f"unsupported Devin session store schema: {db}")
+        row = connection.execute(
+            "SELECT working_directory, main_chain_id, hidden FROM sessions WHERE id=?",
+            (text,)).fetchone()
+        if row is None:
+            exported = devin_transcripts() / f"{text}.json"
+            if exported.is_file():
+                return devin_export(json.loads(exported.read_text(encoding="utf-8")),
+                                    str(exported))
+            raise ValueError(f"Devin session not found: {text}")
+        nodes = connection.execute(
+            "SELECT node_id, parent_node_id, chat_message FROM message_nodes "
+            "WHERE session_id=?", (text,)).fetchall()
+    by_id: dict[int, tuple] = {}
+    for node_id, parent_id, chat in nodes:
+        by_id[node_id] = (parent_id, chat)
+    leaf = row["main_chain_id"]
+    if leaf not in by_id:
+        leaf = max(by_id) if by_id else None
+    chain, visited = [], set()
+    while leaf is not None:
+        if leaf in visited:
+            raise ValueError(f"cycle in Devin conversation at node {leaf}: {text}")
+        if leaf not in by_id:
+            raise ValueError(f"missing Devin parent node {leaf}: {text}")
+        visited.add(leaf)
+        parent, chat = by_id[leaf]
+        chain.append(chat)
+        leaf = parent
+    session = {"harness": "devin", "session_id": text,
+               "cwd": row["working_directory"] or "", "entrypoint": "cli",
+               "turns": [], "path": f"devin://{text}", "chain_head": row["main_chain_id"]}
+    for chat in reversed(chain):
+        try:
+            message = json.loads(chat) if isinstance(chat, str) else chat
+        except json.JSONDecodeError:
+            print(f"dont-forget: malformed Devin message row skipped: {text}",
+                  file=sys.stderr)
+            continue
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role in ("user", "assistant"):
+            add_turn(session["turns"], role, _devin_message_text(message))
+        # system rows are prompt machinery; tool rows are results — neither is said text.
+    return session
+
+
+def devin_sessions(cutoff: float, before: float, db_path: Path | None = None) -> list[dict]:
+    """Interactive Devin sessions active inside the window, newest first."""
+    db = db_path or devin_state_db()
+    if not db.is_file():
+        return []
+    found = []
+    with read_db(db) as connection:
+        tables = {row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "sessions" not in tables:
+            raise ValueError(f"unsupported Devin session store schema: {db}")
+        for row in connection.execute(
+                "SELECT id, working_directory, last_activity_at, hidden FROM sessions "
+                "WHERE last_activity_at>=? AND last_activity_at<=?", (cutoff, before)):
+            found.append({"session_id": row["id"], "cwd": row["working_directory"] or "",
+                          "mtime": row["last_activity_at"], "hidden": bool(row["hidden"]),
+                          "path": f"devin://{row['id']}"})
+    found.sort(key=lambda item: item["mtime"], reverse=True)
+    return found
+
+
+def omp_active(leaf_id: str | None = None) -> dict:
+    """The running OMP session, honouring both of its native fields.
+
+    PI_SESSION_FILE names the file itself and beats an id lookup; an empty value or a
+    missing file is a failure, not a hint to try neighbours. When both fields are set
+    they must name the same session — a mismatch is exactly the inherited-variable
+    case this layer refuses to guess on.
+    """
+    file_var = os.environ.get("PI_SESSION_FILE")
+    session_id = (os.environ.get("PI_SESSION_ID") or "").strip()
+    if file_var is not None:
+        if not file_var.strip():
+            raise ValueError("PI_SESSION_FILE is set but empty")
+        path = Path(file_var).expanduser()
+        if not path.is_file():
+            raise ValueError(f"PI_SESSION_FILE does not exist: {path}")
+        header = omp_session(path, metadata_only=True)
+        if session_id and header["session_id"] != session_id:
+            raise ValueError(f"PI_SESSION_ID {session_id} does not match {path} "
+                             f"(session {header['session_id']})")
+        return omp_session(path, leaf_id=leaf_id)
+    if not session_id:
+        raise ValueError("the omp session advertises no id; pass --session")
+    return omp_session(omp_transcript_path(session_id), leaf_id=leaf_id)
+
+
+def omp_transcript_path(session_id: str) -> Path:
+    """The OMP file whose header names this id — the filename only embeds a prefix."""
+    root = omp_root()
+    try:
+        paths = sorted(root.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime,
+                       reverse=True)
+    except OSError as error:
+        raise ValueError(f"cannot list OMP sessions under {root}: {error}") from error
+    scanned = 0
+    for path in paths:
+        for entry in json_lines(path):
+            kind = entry.get("type")
+            if kind == "title":
+                continue
+            if kind != "session":
+                break
+            scanned += 1
+            if entry.get("id") == session_id:
+                return path
+            break
+    raise ValueError(f"OMP session {session_id} was not found under {root} "
+                     f"({scanned} sessions scanned)")
 
 
 # ---------------------------------------------------------------------------

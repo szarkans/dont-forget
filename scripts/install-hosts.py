@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REFERENCES = {"about": "about", "this": "that", "session": "session", "review": "audit",
               "setup": "setup", "checkup": "health", "him-please": "him-please"}
 DESIRED_HOOK = "python3 {path} --hook --harness codex --budget 12288"
+DESIRED_DEVIN_HOOK = "python3 {path} --hook --harness devin --budget 12288"
 LEGACY_HOOK = "python3 {path} --hook"
 BACKUP_ID = re.compile(r"^[0-9]{8}T[0-9]{12}$")
 HOOK_EVENTS = {"SessionStart": "startup|resume|clear|compact|fork",
@@ -384,27 +385,29 @@ def shared_dir(home: Path) -> Path:
     return home / ".agents/skills/dont-forget"
 
 
-def _replace_root(text: str) -> str:
-    # The generated references run `python3 "<root>/scripts/x.py"`. Replace the whole
-    # quoted string with a shell-quoted concrete path; a raw root pasted inside double
-    # quotes would break on spaces and `$`.
+def _replace_root(text: str, script_root: Path) -> str:
+    # The generated references run `python3 "<root>/scripts/x.py"`. The root written
+    # into them is the installed skill dir — a stable location whose `scripts` symlink
+    # follows the checkout wherever it moves — so a checkout relocation rewrites only
+    # that one symlink, not every reference and hook on the machine.
     text = re.sub(r'"\$\{CLAUDE_PLUGIN_ROOT\}/(scripts/[^"]+)"',
-                  lambda match: shlex.quote(str(ROOT / match.group(1))), text)
-    return text.replace("${CLAUDE_PLUGIN_ROOT}", str(ROOT))
+                  lambda match: shlex.quote(str(script_root / match.group(1))), text)
+    return text.replace("${CLAUDE_PLUGIN_ROOT}", str(script_root))
 
 
-def shared_files() -> dict[Path, bytes]:
+def shared_files(home: Path) -> dict[Path, bytes]:
     files = {Path("SKILL.md"): (ROOT / "integrations/SKILL.md").read_bytes()}
     for name, skill in REFERENCES.items():
         raw = (ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
-        files[Path("references") / f"{name}.md"] = _replace_root(raw).encode("utf-8")
+        files[Path("references") / f"{name}.md"] = _replace_root(
+            raw, shared_dir(home)).encode("utf-8")
     files[Path("references/feedback.md")] = (ROOT / "integrations/feedback.md").read_bytes()
     return files
 
 
 def plan_shared(home: Path, adopt: bool, receipt: dict | None) -> tuple[list[dict], list[str]]:
     target = shared_dir(home)
-    files = shared_files()
+    files = shared_files(home)
     ops, conflicts = [], []
     owned = receipt is not None
     if target.exists() and not owned:
@@ -429,24 +432,33 @@ def plan_shared(home: Path, adopt: bool, receipt: dict | None) -> tuple[list[dic
             continue
         ops.append(file_op(path, data,
                            path.read_bytes() if current["kind"] == "file" else None))
-    link = target / "scripts"
-    if link.is_symlink():
-        if link.resolve() != (ROOT / "scripts").resolve():
-            conflicts.append(f"{link} points at another checkout: {link.resolve()}")
-    elif link.exists():
-        conflicts.append(f"{link} is not a symlink")
-    else:
-        ops.append(link_op(link, ROOT / "scripts"))
+    for name in ("scripts", "integrations"):
+        link = target / name
+        source = ROOT / name
+        if link.is_symlink():
+            if link.resolve() != source.resolve():
+                conflicts.append(f"{link} points at another checkout: {link.resolve()}")
+        elif link.exists():
+            conflicts.append(f"{link} is not a symlink")
+        else:
+            ops.append(link_op(link, source))
     return ops, conflicts
 
 
-def codex_owned_commands() -> set[str]:
-    script = shlex.quote(str(ROOT / "scripts/hot-scan.py"))
-    return {DESIRED_HOOK.format(path=script), LEGACY_HOOK.format(path=script)}
+def _hot_scan_paths(home: Path) -> list[str]:
+    # The shared path is what new hooks get; the checkout path is what older installs
+    # wrote. Both are owned, so a re-install replaces either generation with one hook.
+    return [shlex.quote(str(shared_dir(home) / "scripts/hot-scan.py")),
+            shlex.quote(str(ROOT / "scripts/hot-scan.py"))]
 
 
-def _desired_codex_group(event: str) -> dict:
-    script = shlex.quote(str(ROOT / "scripts/hot-scan.py"))
+def codex_owned_commands(home: Path) -> set[str]:
+    return {DESIRED_HOOK.format(path=script) for script in _hot_scan_paths(home)} | \
+           {LEGACY_HOOK.format(path=script) for script in _hot_scan_paths(home)}
+
+
+def _desired_codex_group(event: str, home: Path) -> dict:
+    script = shlex.quote(str(shared_dir(home) / "scripts/hot-scan.py"))
     handler = {"type": "command", "command": DESIRED_HOOK.format(path=script), "timeout": 15}
     if event == "SessionStart":
         # Only a context-emitting event can use the threshold; PreCompact would warn.
@@ -454,7 +466,7 @@ def _desired_codex_group(event: str) -> dict:
     return {"matcher": HOOK_EVENTS[event], "hooks": [handler]}
 
 
-def plan_codex(codex_home: Path) -> tuple[list[dict], list[str], list[dict]]:
+def plan_codex(codex_home: Path, home: Path) -> tuple[list[dict], list[str], list[dict]]:
     path = codex_home / "hooks.json"
     if path.is_symlink():
         return [], [f"{path} is a symlink; refusing to replace it"], []
@@ -467,11 +479,11 @@ def plan_codex(codex_home: Path) -> tuple[list[dict], list[str], list[dict]]:
     hooks = config.setdefault("hooks", {})
     if not isinstance(hooks, dict):
         return [], [f"{path} has a non-object hooks value"], []
-    owned = codex_owned_commands()
+    owned = codex_owned_commands(home)
     before = json.loads(json.dumps(config))
     changed_hooks = []
     for event in HOOK_EVENTS:
-        wanted = _desired_codex_group(event)
+        wanted = _desired_codex_group(event, home)
         groups = hooks.get(event)
         if groups is None:
             groups = []
@@ -507,7 +519,7 @@ def plan_codex(codex_home: Path) -> tuple[list[dict], list[str], list[dict]]:
         else:
             hooks.pop(event, None)
     records = [{"path": str(path), "event": event, "matcher": HOOK_EVENTS[event],
-                "handler": _desired_codex_group(event)["hooks"][0]["command"]}
+                "handler": _desired_codex_group(event, home)["hooks"][0]["command"]}
                for event in HOOK_EVENTS]
     if canonical(config) == canonical(before):
         return [], [], records
@@ -515,20 +527,78 @@ def plan_codex(codex_home: Path) -> tuple[list[dict], list[str], list[dict]]:
     return [file_op(path, data, path.read_bytes() if path.is_file() else None)], [], records
 
 
-def opencode_wrapper(api: int) -> str:
-    uri = (ROOT / "integrations/opencode.mjs").as_uri()
+def devin_owned_commands(home: Path) -> set[str]:
+    return {DESIRED_DEVIN_HOOK.format(path=script) for script in _hot_scan_paths(home)} | \
+           {LEGACY_HOOK.format(path=script) for script in _hot_scan_paths(home)}
+
+
+def plan_devin(config_home: Path, home: Path) -> tuple[list[dict], list[str], list[dict]]:
+    """One SessionStart group inside Devin's config.json, next to the user's own hooks.
+
+    Devin's hook groups carry no matcher, and the digest belongs only to SessionStart —
+    the one event whose output can reach the model as context. Existing groups are
+    preserved exactly; only commands this installer owns are ever replaced.
+    """
+    path = config_home / "config.json"
+    if path.is_symlink():
+        return [], [f"{path} is a symlink; refusing to replace it"], []
+    try:
+        config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"hooks": {}}
+    except (OSError, json.JSONDecodeError) as error:
+        return [], [f"cannot read {path}: {error}"], []
+    if not isinstance(config, dict):
+        return [], [f"{path} is not a JSON object"], []
+    hooks = config.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return [], [f"{path} has a non-object hooks value"], []
+    script = shlex.quote(str(shared_dir(home) / "scripts/hot-scan.py"))
+    command = DESIRED_DEVIN_HOOK.format(path=script)
+    wanted = {"hooks": [{"type": "command", "command": command, "timeout": 15}]}
+    owned = devin_owned_commands(home)
+    before = json.loads(json.dumps(config))
+    groups = hooks.get("SessionStart")
+    if groups is not None and not isinstance(groups, list):
+        return [], [f"{path} has a non-list SessionStart hooks value"], []
+    kept_groups = []
+    exact = False
+    for group in groups or []:
+        if canonical(group) == canonical(wanted):
+            exact = True
+            kept_groups.append(group)
+            continue
+        if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+            kept_groups.append(group)
+            continue
+        kept = [handler for handler in group["hooks"]
+                if not (isinstance(handler, dict) and handler.get("command") in owned)]
+        if kept:
+            kept_groups.append({**group, "hooks": kept})
+    if not exact:
+        kept_groups.append(wanted)
+    hooks["SessionStart"] = kept_groups
+    records = [{"path": str(path), "event": "SessionStart", "matcher": None,
+                "handler": command}]
+    if canonical(config) == canonical(before):
+        return [], [], records
+    data = (json.dumps(config, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    return [file_op(path, data, path.read_bytes() if path.is_file() else None)], [], records
+
+
+def opencode_wrapper(api: int, home: Path) -> str:
+    uri = (shared_dir(home) / "integrations/opencode.mjs").as_uri()
     exported = "adapter" if api == 2 else "legacy"
     return (f'import adapter, {{ legacy }} from {json.dumps(uri)};\n'
             f'export default {exported};\n')
 
 
-def omp_wrapper() -> str:
-    uri = (ROOT / "integrations/omp.mjs").as_uri()
+def omp_wrapper(home: Path) -> str:
+    uri = (shared_dir(home) / "integrations/omp.mjs").as_uri()
     return f'export {{ default }} from {json.dumps(uri)};\n'
 
 
 def plan_file_target(path: Path, data: str, known: list[str], receipt: dict | None,
-                     target_name: str) -> tuple[list[dict], list[str]]:
+                     target_name: str, owned_pattern: str | None = None
+                     ) -> tuple[list[dict], list[str]]:
     ops, conflicts = [], []
     current = state_of(path)
     if current["kind"] == "absent":
@@ -537,7 +607,12 @@ def plan_file_target(path: Path, data: str, known: list[str], receipt: dict | No
         existing = path.read_bytes()
         if existing == data.encode("utf-8"):
             return [], []
-        if receipt is not None or any(existing == candidate.encode("utf-8") for candidate in known):
+        # A wrapper this installer generated for a checkout that has since moved is
+        # still ours: same shape, a different absolute path. Adopt it by pattern.
+        legacy = (owned_pattern is not None
+                  and re.fullmatch(owned_pattern, existing.decode("utf-8", errors="replace")))
+        if receipt is not None or legacy or any(
+                existing == candidate.encode("utf-8") for candidate in known):
             return [file_op(path, data.encode("utf-8"), existing)], []
         conflicts.append(f"{path} exists with different content and is not an owned {target_name}")
         return [], conflicts
@@ -554,15 +629,16 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
         if conflicts:
             return ops, conflicts, [], None, str(target)
         files = [file_entry(shared_dir(home) / relative, data)
-                 for relative, data in shared_files().items()]
+                 for relative, data in shared_files(home).items()]
         files.append(symlink_entry(shared_dir(home) / "scripts", ROOT / "scripts"))
+        files.append(symlink_entry(shared_dir(home) / "integrations", ROOT / "integrations"))
         after = {"host": "shared", "target": str(target), "source": str(ROOT),
                  "files": files, "hooks": []}
         return ops, [], [], after, str(target)
 
     if host == "codex":
         target = roots["codex"]
-        ops, conflicts, hook_ops = plan_codex(target)
+        ops, conflicts, hook_ops = plan_codex(target, home)
         if conflicts:
             return ops, conflicts, [], None, str(target)
         files = []
@@ -573,11 +649,12 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
     if host == "opencode":
         target = roots["opencode"]
         path = target / "plugins/dont-forget.js"
-        data = opencode_wrapper(api or 2)
-        known = [opencode_wrapper(1), opencode_wrapper(2)]
-        ops, conflicts = plan_file_target(path, data, known,
-                                          receipt_entry(receipt, "opencode", str(target)),
-                                          "OpenCode plugin")
+        data = opencode_wrapper(api or 2, home)
+        known = [opencode_wrapper(1, home), opencode_wrapper(2, home)]
+        ops, conflicts = plan_file_target(
+            path, data, known, receipt_entry(receipt, "opencode", str(target)),
+            "OpenCode plugin",
+            owned_pattern=r'import adapter, \{ legacy \} from "file://[^"]+/dont-forget/integrations/opencode\.mjs";\s*export default (?:adapter|legacy);\s*')
         if conflicts:
             return ops, conflicts, [], None, str(target)
         files = [file_entry(path, data.encode("utf-8"))]
@@ -588,7 +665,7 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
     if host == "omp":
         target = roots["omp"]
         path = target / "extensions/dont-forget.js"
-        data = omp_wrapper()
+        data = omp_wrapper(home)
         conflicts = []
         extension_dir = target / "extensions"
         if extension_dir.is_dir():
@@ -606,15 +683,25 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
                         "before installing the OMP extension (two sources would duplicate memory)")
         if conflicts:
             return [], conflicts, [], None, str(target)
-        ops, conflicts = plan_file_target(path, data, [data],
-                                          receipt_entry(receipt, "omp", str(target)),
-                                          "OMP extension")
+        ops, conflicts = plan_file_target(
+            path, data, [data], receipt_entry(receipt, "omp", str(target)),
+            "OMP extension",
+            owned_pattern=r'export \{ default \} from "file://[^"]+/dont-forget/integrations/omp\.mjs";?\s*')
         if conflicts:
             return ops, conflicts, [], None, str(target)
         files = [file_entry(path, data.encode("utf-8"))]
         after = {"host": "omp", "target": str(target), "source": str(ROOT),
                  "files": files, "hooks": []}
         return ops, [], [], after, str(target)
+
+    if host == "devin":
+        target = roots["devin"]
+        ops, conflicts, hook_ops = plan_devin(target, home)
+        if conflicts:
+            return ops, conflicts, [], None, str(target)
+        after = {"host": "devin", "target": str(target), "source": str(ROOT),
+                 "files": [], "hooks": hook_ops}
+        return ops, [], hook_ops, after, str(target)
 
     raise ValueError(f"unknown host: {host}")
 
@@ -635,7 +722,7 @@ def plan_uninstall(hosts: list[str], receipt: dict) -> tuple[list[dict], list[st
                 conflicts.append(f"{path} does not match the installed file; not removing it")
                 continue
             ops.append(file_op(path, None, path.read_bytes() if current["kind"] == "file" else None))
-        if entry.get("host") == "codex" and entry.get("hooks"):
+        if entry.get("host") in ("codex", "devin") and entry.get("hooks"):
             path = Path(entry["hooks"][0]["path"])
             if not path.exists():
                 continue
@@ -681,7 +768,7 @@ def state_of_path() -> Path:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("shared", "codex", "opencode", "omp", "all"))
+    parser.add_argument("--host", choices=("shared", "codex", "opencode", "omp", "devin", "all"))
     parser.add_argument("--home", type=Path, default=Path.home(),
                         help="override install destinations for isolated checks")
     parser.add_argument("--opencode-api", type=int, choices=(1, 2),
@@ -709,6 +796,7 @@ def _resolve_roots(args):
         opencode = (Path(os.environ["OPENCODE_CONFIG_DIR"]).expanduser().resolve()
                     if os.environ.get("OPENCODE_CONFIG_DIR")
                     else (Path(xdg).expanduser().resolve() if xdg else home / ".config") / "opencode")
+        devin = Path(xdg).expanduser().resolve() / "devin" if xdg else home / ".config/devin"
         agent = args.omp_agent_dir.expanduser().resolve() if args.omp_agent_dir else omp_agent_dir()
     else:
         if explicit_state:
@@ -719,10 +807,11 @@ def _resolve_roots(args):
             state = home / ".dont-forget"
         codex = home / ".codex"
         opencode = home / ".config/opencode"
+        devin = home / ".config/devin"
         agent = args.omp_agent_dir.expanduser().resolve() if args.omp_agent_dir else home / ".omp/agent"
         if not agent.is_relative_to(home):
             raise ValueError(f"--omp-agent-dir must be inside {home}: {agent}")
-    return home, native, state, codex, opencode, agent
+    return home, native, state, codex, opencode, agent, devin
 
 
 def _detect_opencode_major(args) -> int | None:
@@ -748,7 +837,7 @@ def main() -> None:
     args = parse_args()
     global STATE
     try:
-        home, native, STATE, codex, opencode, agent = _resolve_roots(args)
+        home, native, STATE, codex, opencode, agent, devin = _resolve_roots(args)
         os.environ["_DF_OMP_AGENT_DIR"] = str(agent)
         os.environ["_DF_HOSTS_HOME"] = str(home) if not native else ""
         receipt = read_receipt(STATE)
@@ -812,6 +901,13 @@ def main() -> None:
             selected.append("omp")
         else:
             skipped.append("omp")
+        # A data directory is proof enough for Devin: the CLI can sit on a shim PATH
+        # that a bare installer shell does not share.
+        if shutil.which("devin") or devin.is_dir() \
+                or (home / ".local/share/devin").is_dir():
+            selected.append("devin")
+        else:
+            skipped.append("devin")
     else:
         if args.host != "shared":
             selected.append(args.host)
@@ -823,7 +919,7 @@ def main() -> None:
             if api is None:
                 raise SystemExit("dont-forget: --opencode-api 1|2 is required when OpenCode is not installed")
 
-    roots = {"codex": codex, "opencode": opencode, "omp": agent}
+    roots = {"codex": codex, "opencode": opencode, "omp": agent, "devin": devin}
     ops: list[dict] = []
     conflicts: list[str] = []
     entries: list[dict] = []

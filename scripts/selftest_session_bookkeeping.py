@@ -19,7 +19,8 @@ SCRIPTS = Path(__file__).parent
 WRITER = SCRIPTS / "vault-write.py"
 CONTENT = "---\ntype: session\n---\n# Audit\n\n[[hub]]\n"
 IDENTITY_KEYS = ("PI_SESSION_ID", "PI_SESSION_FILE", "OPENCODE_SESSION_ID",
-                 "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
+                 "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID",
+                 "CHISEL_SESSION_DB", "AI_AGENT", "DEVIN_TRACEPARENT")
 
 
 def environment(home: Path, **identity) -> dict:

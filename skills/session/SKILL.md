@@ -18,13 +18,19 @@ not show, and never invent a candidate the conversation does not support.
 You lived through this session, so you are its worst auditor: your context is full, and
 whatever became routine along the way is now invisible to you.
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py"`. It prints this session's
-transcript path and how many pieces it splits into. Start one sub-agent per piece, in
-parallel, and give each the **path it printed** plus its own piece number —
-`transcript.py --path <path> --piece N` — because a second session in the same project
-would otherwise make a reader pick up someone else's conversation. Hand them the checklist
-below; never paste the transcript into a prompt, since the whole point is that they read
-the file rather than your recollection of it.
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py"`. It resolves this session
+on whichever harness hosts it — Claude, Codex, OpenCode, OMP or Devin — freezes the
+conversation into a snapshot file, and prints that file plus how many pieces it splits
+into. Auditing a different session needs its coordinates instead:
+`transcript.py --harness <host> --session <id>`, or `--path <file-or-uri>` for the
+`opencode://` and `devin://` listings that `unclosed.py --list` prints.
+
+Start one sub-agent per piece, in parallel, and give each the **snapshot file** plus its
+own piece number — `transcript.py --snapshot <file> --piece N` — because a live store
+keeps growing while they read, and a second session in the same project would otherwise
+make a reader pick up someone else's conversation. Hand them the checklist below; never
+paste the transcript into a prompt, since the whole point is that they read the file
+rather than your recollection of it.
 
 They return candidates and write nothing. You merge the lists, drop exact duplicates, and
 keep every disagreement visible — two readers of two pieces see different things, which is
@@ -33,8 +39,8 @@ say plainly that this is the weaker check.
 
 A session that ended before the skill ran shows up in the startup digest and in
 `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/unclosed.py" --list`. Audit it the same way: take
-its path from there and run `transcript.py --path <path>` — that only marks it as closing;
-it is recorded as closed when the session note is written.
+its path or URI from there and run `transcript.py --path <it>` — that only marks it as
+closing; it is recorded as closed when the session note is written.
 
 **The checklist for each reader:** which requests were completed and which were not; which
 decisions were made and whether they were saved; commits, pull requests and anything
@@ -45,9 +51,25 @@ errors that were never resolved; questions that were never answered; code-bound 
 
 ## Present the candidates
 
-Show the whole list, uncut — the user is the only filter that works, and trimming it takes
-away their chance to catch what you read wrongly. Give each candidate a destination: the
-vault, the repository rules, a runbook, or nowhere; when you are unsure, nowhere.
+The report has one shape on every harness: two tables, nothing else between the summary
+line and them. Show the whole list, uncut — the user is the only filter that works, and
+trimming it takes away their chance to catch what you read wrongly.
+
+Findings — everything worth keeping, one row each:
+
+| # | Finding | Kind | Destination |
+|---|---------|------|-------------|
+| 1 | <what was learned, with the evidence it rests on> | gotcha / decision / principle / pain / correction | vault / repo rules / runbook / nowhere |
+
+Open threads — everything left unfinished:
+
+| Thread | Who closes it | What kills it |
+|--------|---------------|---------------|
+| <the unfinished thing and its state> | user / next session / CI / nobody | <the event or condition that ends it> |
+
+Give each candidate a destination: the vault, the repository rules, a runbook, or
+nowhere; when you are unsure, nowhere. Disagreements between readers get their own rows —
+two readers of two pieces see different things, which is why it was split.
 
 Sort every loose end by whether doing something kills it. "Merge PR #41" dies when someone
 merges it — a thread. "The RCON password went out in public chat" describes how the world

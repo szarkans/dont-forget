@@ -14,8 +14,11 @@ from pathlib import Path
 
 from common import DEFAULT_DB, config_count, connect_ro
 from index import refresh_index, strip_fences
+from session_sources import record_session_map, validate_session_id
 from threads import closed_keys, key as thread_key
 from unclosed import DAYS as UNCLOSED_DAYS, scan as scan_unclosed
+
+UNCLOSED_SCRIPT = (Path(__file__).resolve().parent / "unclosed.py")
 
 # An unticked box in a session note is an unfinished thread, wherever it sits. Matching
 # a list of heading names instead used to lose real tails two ways: a heading nobody
@@ -206,7 +209,7 @@ def read_godnotes(db_path: Path, project: str = "") -> list[str]:
     return out
 
 
-def read_unclosed(limit: int = 5) -> tuple[list[str], int, int]:
+def read_unclosed(limit: int = 5, current_session_id: str | None = None) -> tuple[list[str], int, int]:
     """The newest sessions nobody closed, as digest lines.
 
     The section is a hint, not a register: the scan is capped here and the rest stays
@@ -215,7 +218,8 @@ def read_unclosed(limit: int = 5) -> tuple[list[str], int, int]:
     """
     stats: dict = {}
     try:
-        sessions = scan_unclosed(seconds=3, stats=stats)
+        sessions = scan_unclosed(seconds=3, stats=stats,
+                                 current_session_id=current_session_id)
     except Exception as error:  # the hook must never die here
         print(f"dont-forget: unclosed scan failed: {error}", file=sys.stderr)
         return [], 0, 0
@@ -267,11 +271,12 @@ def fit_budget(payload: dict, budget: int) -> dict:
 
 
 def scan(db_path: Path, tail_limit: int, gotcha_limit: int, budget: int, project: str = "",
-         index_error: str | None = None) -> dict:
+         index_error: str | None = None, current_session_id: str | None = None) -> dict:
     tails = read_tails(db_path, tail_limit, project)
     gotchas = read_gotchas(db_path, gotcha_limit, project)
     godnotes = read_godnotes(db_path, project)
-    unclosed, unclosed_total, unclosed_unscanned = read_unclosed()
+    unclosed, unclosed_total, unclosed_unscanned = read_unclosed(
+        current_session_id=current_session_id)
     scope = f" in {project}" if project else ""
     note = (
         f"dont-forget: the freshest open threads, gotchas, godnotes and unclosed sessions"
@@ -292,7 +297,7 @@ def scan(db_path: Path, tail_limit: int, gotcha_limit: int, budget: int, project
     return payload
 
 
-def hook_payload(payload: dict) -> dict:
+def hook_payload(payload: dict, harness: str = "claude") -> dict:
     lines = []
     if payload["tails"] or payload["gotchas"] or payload.get("godnotes") or payload.get("unclosed"):
         lines.append(payload["note"])
@@ -304,12 +309,12 @@ def hook_payload(payload: dict) -> dict:
         count = f"at least {total}" if payload.get("unclosed_unscanned") else str(total)
         lines.append(
             f"Unclosed sessions — {count} "
-            f"in {UNCLOSED_DAYS} days; `/dont-forget:session` on one "
-            f"(`transcript.py --path <path>`) saves its gotchas:")
+            f"in {UNCLOSED_DAYS} days; `/dont-forget:session` on one saves its gotchas: "
+            f"`transcript.py --harness {harness} --session <id>` or `--path <file-or-uri>`")
         lines += [f"- {session}" for session in payload["unclosed"]]
         if total > len(payload["unclosed"]):
             lines.append(
-                'The rest: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/unclosed.py" --list`.')
+                f"The rest: `python3 {UNCLOSED_SCRIPT} --list`.")
     if payload["gotchas"]:
         lines += ["Gotchas — these describe how things are, nothing to do:",
                   *(f"- {gotcha}" for gotcha in payload["gotchas"])]
@@ -335,6 +340,39 @@ def hook_payload(payload: dict) -> dict:
     }
 
 
+def _stdin_session_id() -> str | None:
+    """The session id a hook's stdin payload carries, when one arrives.
+
+    Hooks are given JSON on stdin; reading it must never block a session start, so an
+    interactive or silent stdin yields nothing rather than a hang.
+    """
+    try:
+        if sys.stdin.isatty():
+            return None
+        import select
+        if not select.select([sys.stdin], [], [], 0.2)[0]:
+            return None
+        payload = json.loads(sys.stdin.read())
+    except (OSError, ValueError):
+        return None
+    if isinstance(payload, dict):
+        session_id = payload.get("session_id") or payload.get("sessionId")
+        if isinstance(session_id, str) and session_id:
+            return session_id
+    return None
+
+
+def _canonical_session_id(harness: str, session_id: str) -> str | None:
+    """Bookkeeping form: raw for Claude, namespaced for every other host."""
+    canonical = session_id if harness == "claude" else f"{harness}:{session_id}"
+    try:
+        return validate_session_id(canonical)
+    except ValueError as error:
+        print(f"dont-forget: ignoring unusable session id {session_id!r}: {error}",
+              file=sys.stderr)
+        return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
@@ -344,7 +382,26 @@ def main() -> None:
     parser.add_argument("--project", default=None,
                         help="filter by project; empty string disables the filter")
     parser.add_argument("--hook", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--text", action="store_true",
+                        help="print the digest as plain context text for host adapters")
+    parser.add_argument("--harness",
+                        choices=("claude", "codex", "opencode", "omp", "devin"),
+                        help="the host this digest is for; with --session names the audit id")
+    parser.add_argument("--session",
+                        help="the session id inside that host's store")
     args = parser.parse_args()
+
+    if args.session and not args.harness:
+        raise SystemExit("dont-forget: --session needs --harness")
+    session_id = args.session or (_stdin_session_id() if args.hook or args.text else None)
+    canonical_session = None
+    if session_id and args.harness:
+        canonical_session = _canonical_session_id(args.harness, session_id)
+        try:
+            record_session_map(args.harness, session_id, str(Path.cwd().resolve()))
+        except OSError as error:
+            print(f"dont-forget: could not record the session map: {error}", file=sys.stderr)
+
     # The digest is only as fresh as the index, and nothing else refreshes it at startup.
     index_error = refresh_index() if args.db == DEFAULT_DB else None
     project = current_project() if args.project is None else normalize(args.project)
@@ -354,8 +411,13 @@ def main() -> None:
     # the wrapped context — section headings, bullets and the JSON envelope — not the bare
     # payload. Reserve their cost instead of overshooting by it.
     budget = args.budget - HOOK_OVERHEAD if args.hook else args.budget
-    payload = scan(args.db, tail_limit, gotcha_limit, budget, project, index_error)
-    output = hook_payload(payload) if args.hook else payload
+    payload = scan(args.db, tail_limit, gotcha_limit, budget, project, index_error,
+                   canonical_session)
+    if args.text:
+        print(hook_payload(payload, args.harness or "claude")
+              ["hookSpecificOutput"]["additionalContext"])
+        return
+    output = hook_payload(payload, args.harness or "claude") if args.hook else payload
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))
 
 

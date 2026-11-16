@@ -144,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-install-") as directory:
     all_home = home / "all"
     result = load(run(all_home, "--host", "all", path="/nonexistent"))
     assert result["hosts"] == ["shared"], result
-    assert set(result["skipped"]) == {"codex", "opencode", "omp"}, result
+    assert set(result["skipped"]) == {"codex", "opencode", "omp", "devin"}, result
     assert (all_home / ".dont-forget/hosts.json").is_file()
 
     # all-uninstall reads the receipt, not PATH, and removes the shared entry too.
@@ -215,9 +215,10 @@ spec = importlib.util.spec_from_file_location("install_hosts", SCRIPT)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 module.ROOT = Path("/tmp/a b'c$d/dont-forget")
-group = module._desired_codex_group("SessionStart")
+group = module._desired_codex_group("SessionStart", Path("/tmp/a b'c$d/home"))
 argv = shlex.split(group["hooks"][0]["command"])
-assert argv[0] == "python3" and argv[1] == "/tmp/a b'c$d/dont-forget/scripts/hot-scan.py", argv
+assert argv[0] == "python3" and \
+    argv[1] == "/tmp/a b'c$d/home/.agents/skills/dont-forget/scripts/hot-scan.py", argv
 assert "--harness" in argv and "codex" in argv and "--budget" in argv, argv
 
 print("ok")

@@ -25,9 +25,9 @@ from pathlib import Path
 
 from common import HOME_DIR
 from session_sources import (active_session_identity, claude_projects, codex_root, codex_session,
-                             opencode_session, opencode_sessions, omp_root, omp_session,
-                             parse_rollout_name, resolve_codex_thread, session_facts,
-                             validate_session_id)
+                             devin_session, devin_sessions, opencode_session, opencode_sessions,
+                             omp_root, omp_session, parse_rollout_name, resolve_codex_thread,
+                             session_facts, validate_session_id)
 
 if os.name == "nt":
     import msvcrt
@@ -391,6 +391,12 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
         except (OSError, sqlite3.Error, ValueError) as error:
             stats["errors"].append(f"OpenCode session discovery failed: {error}")
             print(f"dont-forget: OpenCode session discovery failed: {error}", file=sys.stderr)
+        try:
+            candidates.extend(row for row in devin_sessions(cutoff, now - STALE)
+                              if not row.get("hidden"))
+        except (OSError, sqlite3.Error, ValueError) as error:
+            stats["errors"].append(f"Devin session discovery failed: {error}")
+            print(f"dont-forget: Devin session discovery failed: {error}", file=sys.stderr)
         for candidate in sorted(candidates, key=lambda item: item["mtime"], reverse=True):
             key = candidate["path"]
             stamp = (candidate["mtime"], candidate.get("size"))
@@ -398,6 +404,8 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
             def build(candidate=candidate, key=key):
                 if key.startswith("opencode://"):
                     return session_facts(opencode_session(key.removeprefix("opencode://")))
+                if key.startswith("devin://"):
+                    return session_facts(devin_session(key.removeprefix("devin://")))
                 if "thread" in candidate:
                     return session_facts(codex_session(Path(key)))
                 return session_facts(omp_session(Path(key)))

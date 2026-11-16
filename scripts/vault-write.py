@@ -14,6 +14,7 @@ from pathlib import Path
 
 from common import DEFAULT_DB, config, vault_from_config
 from secret_scan import warning
+from session_sources import active_session_identity, validate_session_id
 from unclosed import close_pending
 
 try:
@@ -192,6 +193,52 @@ def session_note(content: str) -> bool:
     return str(meta.get("type", "")).strip().lower() == "session"
 
 
+def audit_identity() -> str | None:
+    """The canonical id of the session being closed, from its host's own fields.
+
+    A namespaced value sitting in Claude's variable is a foreign id, not a raw one;
+    an id that fails validation is no identity at all. Both yield None, which the
+    caller reports as no-identity rather than closing a neighbour's audit.
+    """
+    harness, identity = active_session_identity()
+    if not identity or harness == "unknown":
+        return None
+    canonical = identity if harness == "claude" else f"{harness}:{identity}"
+    if harness == "claude" and ":" in canonical:
+        return None
+    try:
+        return validate_session_id(canonical)
+    except ValueError:
+        return None
+
+
+def session_closure(canonical: str | None, wrote: bool) -> dict:
+    """Close the pending audit for exactly this session id, and say how it went.
+
+    A write that did not land cannot close anything; a missing identity never closes
+    on a guess. Everything else reaches the journals under their own lock.
+    """
+    if canonical is None:
+        message = ("the audited session could not be identified; the pending list was"
+                   " not touched — close it with `unclosed.py --dismiss <id>` if needed")
+        print(f"dont-forget: {message}", file=sys.stderr)
+        return {"session_id": None, "status": "no-identity", "warning": message}
+    if not wrote:
+        return {"session_id": canonical, "status": "not-written"}
+    try:
+        outcome = close_pending(canonical)
+    except OSError as error:
+        message = f"the session note is saved but the audit journals failed: {error}"
+        print(f"dont-forget: {message}", file=sys.stderr)
+        return {"session_id": canonical, "status": "error", "warning": message}
+    if outcome == "not-pending":
+        message = (f"session {canonical} was not in the pending list; it may already be"
+                   " closed or was never audited")
+        print(f"dont-forget: {message}", file=sys.stderr)
+        return {"session_id": canonical, "status": outcome, "warning": message}
+    return {"session_id": canonical, "status": outcome}
+
+
 def locate(vault: Path, filename: str, content: str = "") -> Path:
     """Where this note lives, or where a new one goes.
 
@@ -253,6 +300,10 @@ def main() -> None:
         action = payload.get("action", "create")
         if action not in ("create", "replace"):
             raise ValueError("action must be create or replace")
+        # A supplied id names the audited session outright; absent it, the closing
+        # identity is derived from this host's own fields — and only for session notes.
+        supplied_id = (validate_session_id(payload["session_id"])
+                       if "session_id" in payload else None)
         vault = args.vault or vault_from_config()
         if fcntl is not None:
             vault_fd = os.open(vault, os.O_RDONLY)
@@ -291,7 +342,9 @@ def main() -> None:
         # Every write, whatever the genre: "the RCON password leaked" arrived as an open
         # thread, not as a gotcha. The warning goes in the returned status as well as to
         # stderr, so it can be counted later instead of scrolling past.
-        wrote = status in ("created", "replaced")
+        # The note is on disk in its final state for created, replaced and an identical
+        # replay alike — a replay still repairs an audit that never got closed.
+        wrote = status in ("created", "replaced", "exists-same")
         secret_warning = (warning(content)
                           if wrote and config().get("scan_secrets", True) else "")
     except (OSError, ValueError, json.JSONDecodeError) as error:
@@ -299,13 +352,10 @@ def main() -> None:
         raise SystemExit(2) from error
     # The note is the closure: a summary read only marks a session as closing, so an
     # abandoned audit leaves it in the digest. Bookkeeping never unsaves a written note.
-    if wrote and session_note(content):
-        try:
-            close_pending()
-        except OSError as error:
-            print(f"dont-forget: could not record the session as closed: {error}",
-                  file=sys.stderr)
     result = {"status": status}
+    if session_note(content):
+        canonical = supplied_id if supplied_id is not None else audit_identity()
+        result["session_closure"] = session_closure(canonical, wrote)
     if status == "rejected":
         result["problems"] = problems
         print("rejected, not written: " + "; ".join(problems), file=sys.stderr)
