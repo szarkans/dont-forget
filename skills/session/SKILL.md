@@ -73,6 +73,13 @@ Give each candidate a destination: the vault, the repository rules, a runbook, o
 nowhere; when you are unsure, nowhere. Disagreements between readers get their own rows —
 two readers of two pieces see different things, which is why it was split.
 
+Then log the whole table — accepted and rejected alike — so a wrongly judged `nowhere`
+leaves a trail instead of dying silently: pipe the rows as JSON
+(`[{"candidate": ..., "destination": ..., "kind": ...}]`) to
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.py" --session <audit_session_id>`.
+Logging is separate from writing: the journal records the proposal even when the user
+says no to every write.
+
 Sort every loose end by whether doing something kills it. "Merge PR #41" dies when someone
 merges it — a thread. "The RCON password went out in public chat" describes how the world
 is and no action erases it — knowledge, and it goes through `that`. Threads fall out of
