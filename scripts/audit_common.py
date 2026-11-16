@@ -34,6 +34,12 @@ def finding_key(kind: str, titles: list[str]) -> str:
     return f"{LETTER[kind]}-{digest[:16]}"
 
 
+def page_fingerprint(snapshot: dict) -> str:
+    """One name for the exact page the user saw: candidates, verdicts and displayed text."""
+    canonical = json.dumps(snapshot, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def load_verdicts(path: Path = VERDICTS) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
 

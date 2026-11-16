@@ -218,6 +218,20 @@ with tempfile.TemporaryDirectory() as temp:
 vault = Path(candidates["vault"])
 with tempfile.TemporaryDirectory() as temp:
     ac.write_json(ac.VERDICTS, verdicts)
+    run = ac.RUNS / "2026-01-01"
+    # The page is the exact displayed set; a decisions file names this fingerprint and
+    # cannot be applied to a page built from other verdicts.
+    shown = []
+    for candidate, verdict in ac.sort_findings(candidates, verdicts)["page"]:
+        shown.append({"key": candidate["key"], "candidate": ac.note_shas(candidate),
+                      "verdict": {k: v for k, v in verdict.items() if k != "decided"},
+                      "presentation": None})
+    snapshot = {"version": 1,
+                "candidates_sha256": hashlib.sha256((run / "candidates.json").read_bytes()).hexdigest(),
+                "shown": shown}
+    run_id = ac.page_fingerprint(snapshot)
+    ac.write_json(run / "page-snapshot.json", snapshot)
+
     marks = Path(temp) / "export" / "decisions"
     marks.mkdir(parents=True)
     for key, body in ((keys["xy"], {"v": "yes", "c": "в правила\n"}), (keys["dub"], {"v": "no", "c": "мимо"}),
@@ -225,12 +239,34 @@ with tempfile.TemporaryDirectory() as temp:
         (marks / f"{key}.json").write_text(json.dumps(body), encoding="utf-8")
     (marks / ("d-" + "a" * 16 + ".json")).write_text("{not json", encoding="utf-8")
     (marks / ("d-" + "b" * 16 + ".json")).write_text("[1]", encoding="utf-8")
-    # With --run and no --vault the vault is the one this run was found in, not whatever the config says.
-    summary = apply("--decisions", str(marks.parent), "--run", str(run), vault_arg=False)
-    assert summary == {"heavy": str(run / "heavy.json"), "pairs": 0, "godnotes": 1, "tasks": 1, "rejected": 1,
-                       "unmarked": 0, "marks_not_on_page": ["l-" + "0" * 16],
-                       "bad_marks": [f"{marks}/d-{'a' * 16}.json: JSONDecodeError",
-                                     f"{marks}/d-{'b' * 16}.json: not an object"]}, summary
+
+    # A legacy folder has no page id, so it needs an explicit binding; and a malformed
+    # mark refuses the whole import before any verdict is written.
+    before = ac.VERDICTS.read_bytes()
+    error = apply("--decisions", str(marks), "--run", str(run), vault_arg=False, ok=False)
+    assert "not bound to a page" in error, error
+    error = apply("--decisions", str(marks), "--run", str(run), "--allow-unbound-decisions",
+                  vault_arg=False, ok=False)
+    assert "decisions refused" in error and "Expecting property name" in error and "not an object" in error, error
+    assert ac.VERDICTS.read_bytes() == before
+
+    # Duplicate legacy stems are two answers with one name: refused before any write.
+    dupe = Path(temp) / "dupe"
+    for folder, value in (("a", "yes"), ("b", "no")):
+        (dupe / folder).mkdir(parents=True)
+        (dupe / folder / f"{keys['dub']}.json").write_text(json.dumps({"v": value}))
+    error = apply("--decisions", str(dupe), "--run", str(run), "--allow-unbound-decisions",
+                  vault_arg=False, ok=False)
+    assert "repeated legacy mark files" in error, error
+
+    (marks / ("d-" + "a" * 16 + ".json")).unlink()
+    (marks / ("d-" + "b" * 16 + ".json")).unlink()
+    summary = apply("--decisions", str(marks), "--run", str(run), "--allow-unbound-decisions",
+                    vault_arg=False)
+    assert summary["pairs"] == 0 and summary["godnotes"] == 1 and summary["tasks"] == 1, summary
+    assert summary["rejected"] == 1 and summary["unmarked"] == 0, summary
+    assert summary["marks_not_on_page"] == ["l-" + "0" * 16], summary
+    assert summary["run_id"] == run_id and summary["bad_marks"] == [], summary
     heavy = json.loads((run / "heavy.json").read_text(encoding="utf-8"))
     expected_heavy = {
         "pairs": [],
@@ -239,19 +275,36 @@ with tempfile.TemporaryDirectory() as temp:
         "tasks": [{"key": keys["s"], "about": "эс", "comment": "разобраться", "files": [str(vault / "S.md")]}],
     }
     assert heavy == expected_heavy, heavy
-    # The marks are remembered: decided findings leave the page, a comment alone stays a task.
     after = ac.load_verdicts()
     assert after[keys["xy"]]["decided"] == {"v": "yes", "c": "в правила", "run": "2026-01-01"}
     assert after[keys["dub"]]["decided"] == {"v": "no", "c": "мимо", "run": "2026-01-01"}
     assert "decided" not in after[keys["s"]]
     assert [c["key"] for c, _ in ac.sort_findings(candidates, after)["page"]] == [keys["s"]]
-    # The same export read twice gives the same heavy list.
-    assert apply("--decisions", str(marks.parent), "--run", str(run), vault_arg=False) == summary
-    assert json.loads((run / "heavy.json").read_text(encoding="utf-8")) == expected_heavy
+    assert apply("--decisions", str(marks), "--run", str(run), "--allow-unbound-decisions",
+                 vault_arg=False) == summary
 
-    (marks / f"{keys['dub']}.json").write_text(json.dumps({"v": "yes", "c": ""}), encoding="utf-8")
-    (marks / f"{keys['s']}.json").write_text(json.dumps({"v": "yes", "c": ""}), encoding="utf-8")
-    apply("--decisions", str(marks), "--run", str(run))
+    # The bound file export: wrong page, unknown key or duplicate JSON key all refuse and
+    # leave the marks and verdicts untouched.
+    decisions = Path(temp) / "decisions.json"
+    decisions.write_text(json.dumps({"version": 1, "run_id": "0" * 64,
+                                     "decisions": {keys["dub"]: {"v": "yes", "c": ""}}}))
+    before = ac.VERDICTS.read_bytes()
+    error = apply("--decisions", str(decisions), "--run", str(run), vault_arg=False, ok=False)
+    assert "another page run" in error, error
+    decisions.write_text(json.dumps({"version": 1, "run_id": run_id,
+                                     "decisions": {"d-" + "9" * 16: {"v": "yes"}}}))
+    error = apply("--decisions", str(decisions), "--run", str(run), vault_arg=False, ok=False)
+    assert "unknown finding key" in error, error
+    decisions.write_text('{"version":1,"run_id":"%s","decisions":{"%s":{"v":"yes"},"%s":{"v":"no"}}}'
+                         % (run_id, keys["dub"], keys["dub"]))
+    error = apply("--decisions", str(decisions), "--run", str(run), vault_arg=False, ok=False)
+    assert "duplicate key" in error, error
+    assert ac.VERDICTS.read_bytes() == before
+
+    decisions.write_text(json.dumps({"version": 1, "run_id": run_id,
+                                     "decisions": {keys["dub"]: {"v": "yes", "c": ""},
+                                                   keys["s"]: {"v": "yes", "c": ""}}}))
+    apply("--decisions", str(decisions), "--run", str(run), vault_arg=False)
     pairs = json.loads((run / "heavy.json").read_text(encoding="utf-8"))["pairs"]
     assert pairs == [
         {"key": keys["dub"], "verdict": "дубль", "topic": "икс", "fix": "слить", "new_title": None,
@@ -261,6 +314,20 @@ with tempfile.TemporaryDirectory() as temp:
          "new_title": "Fact — S наоборот", "old": {"file": str(vault / "S.md"), "says": "заголовок"}, "new": None,
          "comment": ""},
     ], pairs
+    repeated = apply("--decisions", str(decisions), "--run", str(run), vault_arg=False)
+    assert json.loads((run / "heavy.json").read_text(encoding="utf-8"))["pairs"] == pairs, repeated
+
+    # A note edited after the page was shown is stale, not a decision to apply.
+    with tempfile.TemporaryDirectory() as changed:
+        changed_vault = Path(changed)
+        (changed_vault / "X.md").write_text("# changed\n", encoding="utf-8")
+        changed_snapshot = {"shown": [{"key": keys["xy"], "candidate": {"X.md": "0" * 64}}]}
+        try:
+            audit_apply._check_notes(changed_vault, run, changed_snapshot, {keys["xy"]: {"v": "yes"}})
+            raise AssertionError("a changed note was accepted")
+        except SystemExit as error:
+            assert "changed since the page" in str(error), error
+
     # The fix the user agreed to writes `supersedes`/`## Поправка` or a new title; the stale findings
     # that would raise next run are decided already, so the settled pair does not come back.
     after = ac.load_verdicts()

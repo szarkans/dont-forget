@@ -353,10 +353,12 @@
     });
   });
 
-  // decisions: the viewer marks findings and leaves a note (why "no", or a task instead of a rule);
-  // Claude reads the `decisions` collection back and acts on it
+  // decisions: the viewer marks findings and leaves a note (why "no", or a task instead of a rule).
+  // Marks live in this page until exported: no storage, no network, no server.
   const chip = document.getElementById("decided"), chipErr = chip.querySelector("span");
   const decisions = {}, opened = new Set();
+  document.body.classList.add("can-mark");
+  chip.hidden = false;
   const paint = () => {
     document.querySelectorAll(".mark").forEach(m => {
       const d = decisions[m.dataset.key] || {}, note = m.querySelector(".mark-note");
@@ -368,69 +370,88 @@
     });
     const vals = Object.values(decisions), yes = vals.filter(d => d.v === "yes").length, no = vals.filter(d => d.v === "no").length, notes = vals.filter(d => d.c).length;
     chip.querySelector("b").textContent = vals.length ? `${yes} согласен · ${no} нет${notes ? ` · ${notes} ${plural(notes, "комментарий", "комментария", "комментариев")}` : ""}` : "ничего не отмечено";
+    chipErr.textContent = "";
   };
-  (async () => {
-    const db = window.claude ? await window.claude.use("db") : null;
-    if (!db) return;
-    document.body.classList.add("can-mark"); chip.hidden = false;
-    const col = db.collection("decisions");
-    // Keys whose latest local mark is not saved yet: typed and waiting for the pause, or written and
-    // not acknowledged. A snapshot is older than such a mark, so for these keys the local one wins.
-    const unsaved = {}, typing = new Set();
-    col.onSnapshot(snap => {
-      const local = {};
-      for (const k in decisions) if (unsaved[k] || typing.has(k)) local[k] = decisions[k];
-      for (const k in decisions) delete decisions[k];
-      snap.docs.forEach(d => { const x = d.data(); decisions[d.id] = { v: x.v || undefined, c: x.c || "" }; });
-      Object.assign(decisions, local);
-      paint();
-    }, e => { console.warn("decisions subscription stopped", e.code, e.message); chipErr.textContent = "отметки не загрузились, обнови страницу"; });
-    // One write at a time per finding: each save waits for the previous one to the same document.
-    // The mark is taken when the user acts, not when the write gets its turn.
-    const queue = {};
-    const save = key => {
-      const d = { ...(decisions[key] || {}) };
-      unsaved[key] = (unsaved[key] || 0) + 1;
-      queue[key] = (queue[key] || Promise.resolve()).then(async () => {
-        try {
-          if (d.v || d.c) await col.doc(key).set({ v: d.v || null, c: d.c || "", at: new Date().toISOString() });
-          else await col.doc(key).delete();
-          chipErr.textContent = "";
-        } catch (err) {
-          console.warn("decision not saved", key, err.code, err.message);
-          chipErr.textContent = "не сохранилось, попробуй ещё раз";
-        } finally {
-          if (!--unsaved[key]) delete unsaved[key];
-        }
-      });
-    };
-    document.addEventListener("click", e => {
-      const m = e.target.closest(".mark");
-      if (!m) return;
-      e.stopPropagation();
-      const btn = e.target.closest("button"), key = m.dataset.key;
-      if (!btn) return;
-      const d = decisions[key] = { ...(decisions[key] || {}) };
-      if (btn.classList.contains("note-toggle")) {
-        opened.has(key) ? opened.delete(key) : opened.add(key);
-        paint(); if (!m.querySelector(".mark-note").hidden) m.querySelector(".mark-note").focus();
-        return;
-      }
-      d.v = d.v === btn.dataset.v ? undefined : btn.dataset.v;
-      paint(); save(key);
-      if (d.v === "no" && !d.c) m.querySelector(".mark-note").focus();
-    }, true);
-    const timers = {};
-    document.addEventListener("input", e => {
-      const note = e.target.closest(".mark-note");
-      if (!note) return;
-      const key = note.parentElement.dataset.key;
-      decisions[key] = { ...(decisions[key] || {}), c: note.value };
-      document.querySelectorAll(`.mark[data-key="${key}"] .mark-note`).forEach(n => { if (n !== note) n.value = note.value; });
-      typing.add(key);
-      clearTimeout(timers[key]); timers[key] = setTimeout(() => { save(key); typing.delete(key); paint(); }, 700);
-    });
-  })();
+
+  // Only a complete, matching file replaces the marks. A mismatch leaves the page untouched.
+  const importDecisions = async (file) => {
+    let data;
+    try { data = JSON.parse(await file.text()); }
+    catch { throw new Error("файл решений не JSON"); }
+    if (!data || data.version !== 1) throw new Error("неизвестная версия файла решений");
+    if (!A.run_id || data.run_id !== A.run_id) throw new Error("файл решений относится к другой странице");
+    if (!data.decisions || typeof data.decisions !== "object" || Array.isArray(data.decisions)) {
+      throw new Error("в файле нет объекта decisions");
+    }
+    const allowed = new Set(A.finding_keys || []);
+    const next = {};
+    for (const [key, value] of Object.entries(data.decisions)) {
+      if (!allowed.has(key)) throw new Error(`файл решений называет неизвестную находку: ${key}`);
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`отметка ${key} повреждена`);
+      const v = value.v ?? null;
+      if (v !== null && v !== "yes" && v !== "no") throw new Error(`отметка ${key} повреждена`);
+      const c = value.c ?? "";
+      if (typeof c !== "string") throw new Error(`комментарий ${key} повреждён`);
+      if (v || c.trim()) next[key] = { v: v || undefined, c };
+    }
+    for (const key of Object.keys(decisions)) delete decisions[key];
+    Object.assign(decisions, next);
+    paint();
+  };
+
+  const download = document.getElementById("download-decisions");
+  download?.addEventListener("click", () => {
+    const out = { version: 1, run_id: A.run_id, decisions: {} };
+    for (const key of Object.keys(decisions).sort()) {
+      const d = decisions[key];
+      if (d.v || d.c) out.decisions[key] = { v: d.v || null, c: d.c || "" };
+    }
+    const blob = new Blob([JSON.stringify(out, null, 1)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `dont-forget-decisions-${String(A.run_id || "page").slice(0, 12)}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    chipErr.textContent = "файл скачан; страница не сохраняет отметки сама";
+  });
+  const importInput = document.getElementById("import-decisions");
+  importInput?.addEventListener("change", async () => {
+    const file = importInput.files?.[0];
+    if (!file) return;
+    try { await importDecisions(file); chipErr.textContent = "решения загружены"; }
+    catch (error) { chipErr.textContent = String(error.message || error); }
+    finally { importInput.value = ""; }
+  });
+
+  document.addEventListener("click", e => {
+    const m = e.target.closest(".mark");
+    if (!m) return;
+    e.stopPropagation();
+    const btn = e.target.closest("button"), key = m.dataset.key;
+    if (!btn) return;
+    const d = decisions[key] = { ...(decisions[key] || {}) };
+    if (btn.classList.contains("note-toggle")) {
+      opened.has(key) ? opened.delete(key) : opened.add(key);
+      paint(); if (!m.querySelector(".mark-note").hidden) m.querySelector(".mark-note").focus();
+      return;
+    }
+    d.v = d.v === btn.dataset.v ? undefined : btn.dataset.v;
+    paint();
+    if (d.v === "no" && !d.c) m.querySelector(".mark-note").focus();
+  }, true);
+  document.addEventListener("input", e => {
+    const note = e.target.closest(".mark-note");
+    if (!note) return;
+    const key = note.parentElement.dataset.key;
+    decisions[key] = { ...(decisions[key] || {}), c: note.value };
+    document.querySelectorAll(`.mark[data-key="${key}"] .mark-note`).forEach(n => { if (n !== note) n.value = note.value; });
+    paint();
+  });
+  window.addEventListener("beforeunload", e => {
+    if (!Object.values(decisions).some(d => d.v || d.c)) return;
+    e.preventDefault();
+    e.returnValue = "Отметки не скачаны и пропадут при закрытии.";
+  });
 
   // legend: hover a project to light it up
   const legend = document.getElementById("legend");

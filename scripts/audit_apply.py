@@ -170,39 +170,186 @@ def commit_links(vault: Path, files: list[str], message: str) -> str:
     return git(vault, "rev-parse", "--short", "HEAD").stdout.strip()
 
 
-def read_marks(folder: Path) -> tuple[dict, list[str]]:
-    """{key: {"v": "yes"|"no"|None, "c": comment}} from an export folder, any depth, and the files
-    that are not a mark: a broken export is reported, not a traceback."""
-    marks, bad = {}, []
-    for f in sorted(folder.rglob("*.json")):
-        if not KEY.match(f.stem):
+def _strict_json(path: Path):
+    """JSON with duplicate object keys refused: a repeated key is two answers, not one."""
+    def pairs(items):
+        seen = set()
+        for key, _ in items:
+            if key in seen:
+                raise ValueError(f"duplicate key {key!r}")
+            seen.add(key)
+        return dict(items)
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=pairs)
+
+
+def _mark(value) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    v = value.get("v")
+    c = value.get("c", "")
+    if v not in ("yes", "no", None) or not isinstance(c, str):
+        return None
+    return {"v": v, "c": c.strip()}
+
+
+def read_marks(source: Path, *, expected_run_id: str,
+               allowed_keys: set[str]) -> tuple[dict, list[str]]:
+    """Validated marks from the page's JSON export, or from a legacy per-key directory.
+
+    Everything is checked before a single verdict is written. A file export names the page
+    it came from; a directory does not, so it is accepted only when the caller explicitly
+    bound it to the current page after showing the user that mapping.
+    """
+    bad: list[str] = []
+    if not source.exists():
+        return {}, [f"no such decisions path: {source}"]
+    if source.is_dir():
+        marks: dict[str, dict] = {}
+        stems: dict[str, list[Path]] = {}
+        for path in sorted(source.rglob("*.json")):
+            if not KEY.match(path.stem):
+                continue
+            stems.setdefault(path.stem, []).append(path)
+        for stem, paths in stems.items():
+            if len(paths) > 1:
+                bad.append(f"{stem}: repeated legacy mark files: {', '.join(str(p) for p in paths)}")
+                continue
+            try:
+                body = _strict_json(paths[0])
+            except (OSError, ValueError) as error:
+                bad.append(f"{paths[0]}: {error}")
+                continue
+            if not isinstance(body, dict):
+                bad.append(f"{paths[0]}: not an object")
+                continue
+            extra = set(body) - {"v", "c", "at"}
+            if extra:
+                bad.append(f"{paths[0]}: unknown fields: {', '.join(sorted(extra))}")
+                continue
+            mark = _mark(body)
+            if mark is None:
+                bad.append(f"{paths[0]}: v must be yes/no/null and c a string")
+                continue
+            if mark["v"] or mark["c"]:
+                marks[stem] = mark
+        return marks, bad
+
+    try:
+        data = _strict_json(source)
+    except (OSError, ValueError) as error:
+        return {}, [f"{source}: {error}"]
+    if not isinstance(data, dict):
+        return {}, [f"{source}: not an object"]
+    if data.get("version") != 1:
+        return {}, [f"{source}: unsupported decisions version"]
+    if data.get("run_id") != expected_run_id:
+        return {}, [f"{source}: decisions belong to another page run "
+                    f"({data.get('run_id')!r}, expected {expected_run_id!r})"]
+    decisions = data.get("decisions")
+    if not isinstance(decisions, dict):
+        return {}, [f"{source}: decisions must be an object"]
+    marks = {}
+    for key, value in decisions.items():
+        if key not in allowed_keys:
+            bad.append(f"{source}: unknown finding key {key!r}")
             continue
-        try:
-            body = json.loads(f.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:
-            bad.append(f"{f}: {type(error).__name__}")
+        mark = _mark(value)
+        if mark is None:
+            bad.append(f"{source}: {key}: v must be yes/no/null and c a string")
             continue
-        if not isinstance(body, dict):
-            bad.append(f"{f}: not an object")
-            continue
-        marks[f.stem] = {"v": body.get("v") if body.get("v") in ("yes", "no") else None,
-                         "c": str(body.get("c") or "").strip()}
+        if mark["v"] or mark["c"]:
+            marks[key] = mark
     return marks, bad
 
 
-def cmd_decisions(run: Path, vault: Path, folder: Path) -> dict:
+def _snapshot(run: Path) -> tuple[dict, str]:
+    path = run / "page-snapshot.json"
+    try:
+        snapshot = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise SystemExit(f"no page snapshot in {run}: run the page command and show it to the user first")
+    except (OSError, json.JSONDecodeError) as error:
+        raise SystemExit(f"cannot read page snapshot {path}: {error}") from error
+    if not isinstance(snapshot, dict) or snapshot.get("version") != 1 \
+            or not isinstance(snapshot.get("shown"), list):
+        raise SystemExit(f"unsupported page snapshot: {path}")
+    return snapshot, ac.page_fingerprint(snapshot)
+
+
+def _verified_page(run: Path, snapshot: dict, candidates: dict, verdicts: dict) -> dict:
+    """Current candidates/verdicts must still be the page that was shown."""
+    raw = (run / "candidates.json").read_bytes()
+    if hashlib.sha256(raw).hexdigest() != snapshot.get("candidates_sha256"):
+        raise SystemExit("candidates changed since the page was built; rebuild and show the page again")
+    shown = snapshot["shown"]
+    by_key = {c["key"]: c for kind in ac.KINDS for c in candidates.get(kind, [])}
+    found = ac.sort_findings(candidates, verdicts)
+    current = {}
+    for c, v in found["page"]:
+        current[c["key"]] = (ac.note_shas(c), {k: val for k, val in v.items() if k != "decided"})
+    for c, v in found["decided"]:
+        if v.get("decided", {}).get("run") == run.name:
+            current[c["key"]] = (ac.note_shas(c), {k: val for k, val in v.items() if k != "decided"})
+    expected = {item["key"]: (item.get("candidate"), item.get("verdict")) for item in shown}
+    if current != expected:
+        raise SystemExit("the page no longer matches current candidates/verdicts; rebuild and show it again")
+    return by_key
+
+
+def _check_notes(vault: Path, run: Path, snapshot: dict, marks: dict) -> None:
+    """A marked finding whose notes changed on disk is stale, not a decision to apply."""
+    shown = {item["key"]: item for item in snapshot["shown"]}
+    stale = []
+    for key in marks:
+        item = shown.get(key)
+        if item is None:
+            continue
+        for relative, expected in (item.get("candidate") or {}).items():
+            if not expected:
+                continue
+            path = vault / relative
+            try:
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                stale.append(relative)
+                continue
+            if actual != expected:
+                stale.append(relative)
+    if stale:
+        raise SystemExit("these notes changed since the page was shown; rebuild the page first: "
+                         + ", ".join(sorted(set(stale))))
+
+
+def cmd_decisions(run: Path, vault: Path, source: Path, *, allow_unbound: bool) -> dict:
+    if source.is_dir() and not allow_unbound:
+        raise SystemExit("legacy decision folders are not bound to a page: reopen the page, download "
+                         "its decisions file, or pass --allow-unbound-decisions --run RUN after "
+                         "confirming the mapping with the user")
+    snapshot, run_id = _snapshot(run)
+    allowed = {item["key"] for item in snapshot["shown"]}
+    marks, bad = read_marks(source, expected_run_id=run_id, allowed_keys=allowed)
+    if bad:
+        raise SystemExit("decisions refused, nothing was written:\n" + "\n".join(bad))
     cands = json.loads((run / "candidates.json").read_text(encoding="utf-8"))
     verdicts = ac.load_verdicts()
-    found = ac.sort_findings(cands, verdicts)
-    # Findings this run already recorded as decided stay readable, so a second pass over the
-    # same export gives the same heavy list instead of an empty one.
-    shown = found["page"] + [(c, v) for c, v in found["decided"] if v["decided"].get("run") == run.name]
-    order = {c["key"]: i for i, c in enumerate(c for kind in ac.KINDS for c in cands.get(kind, []))}
-    page = {c["key"]: (c, v) for c, v in sorted(shown, key=lambda cv: order[cv[0]["key"]])}
-    marks, bad = read_marks(folder)
+    by_key = _verified_page(run, snapshot, cands, verdicts)
+    _check_notes(vault, run, snapshot, marks)
+
+    # Work from the page the user saw, not from whatever the verdicts say now.
+    ordered = []
+    for item in snapshot["shown"]:
+        candidate = by_key.get(item["key"])
+        if candidate is not None:
+            ordered.append((candidate, item["verdict"]))
+    decided_now = [(c, v) for c, v in ac.sort_findings(cands, verdicts)["decided"]
+                   if v.get("decided", {}).get("run") == run.name]
+    seen = {c["key"] for c, _ in ordered}
+    ordered.extend((c, v) for c, v in decided_now if c["key"] not in seen)
+    page = {c["key"]: (c, v) for c, v in ordered}
     file = lambda note: str(vault / note["path"])
     heavy = {"pairs": [], "godnotes": [], "tasks": []}
     rejected = 0
+    marks_not_on_page = sorted(set(marks) - set(page))
     for key, (c, v) in page.items():
         mark = marks.get(key, {"v": None, "c": ""})
         if mark["v"]:
@@ -229,11 +376,12 @@ def cmd_decisions(run: Path, vault: Path, folder: Path) -> dict:
                                "comment": mark["c"]})
     ac.write_json(run / "heavy.json", heavy)
     ac.write_json(ac.VERDICTS, verdicts)
-    unknown = sorted(set(marks) - page.keys())
-    return {"heavy": str(run / "heavy.json"), "pairs": len(heavy["pairs"]), "godnotes": len(heavy["godnotes"]),
+    return {"heavy": str(run / "heavy.json"), "run_id": run_id,
+            "pairs": len(heavy["pairs"]), "godnotes": len(heavy["godnotes"]),
             "tasks": len(heavy["tasks"]), "rejected": rejected,
-            "unmarked": len(page) - len(marks.keys() & page.keys()), "marks_not_on_page": unknown,
-            "bad_marks": bad}
+            "unmarked": len(page) - len(marks.keys() & page.keys()),
+            "marks_not_on_page": marks_not_on_page,
+            "bad_marks": []}
 
 
 def decide(verdicts: dict, candidate: dict, verdict: dict, mark: dict, run: str) -> None:
@@ -253,6 +401,7 @@ def main() -> None:
     mode.add_argument("--safe", action="store_true")
     mode.add_argument("--decisions", type=Path)
     parser.add_argument("--dry", action="store_true")
+    parser.add_argument("--allow-unbound-decisions", action="store_true")
     parser.add_argument("--vault", type=Path)
     parser.add_argument("--run", type=Path, help="run folder; the latest one by default")
     args = parser.parse_args()
@@ -266,9 +415,9 @@ def main() -> None:
     if args.safe:
         done = cmd_safe(run, vault, args.dry)
     else:
-        if not args.decisions.is_dir():
-            sys.exit(f"no such folder: {args.decisions}")
-        done = cmd_decisions(run, vault, args.decisions)
+        if args.allow_unbound_decisions and not args.run:
+            sys.exit("--allow-unbound-decisions requires an explicit --run")
+        done = cmd_decisions(run, vault, args.decisions, allow_unbound=args.allow_unbound_decisions)
     print(json.dumps(done, ensure_ascii=False, indent=1))
 
 

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """audit_semantic.py on a synthetic index with hand-set vectors: groups, pairs, stale, verdict carry-over.
 
-The numbers need numpy and scikit-learn, which live only in the plugin venv, so the script runs
-there as a subprocess. Without that venv the test says so on stderr and passes.
+The numbers need numpy and scikit-learn. The test runs under an explicitly supplied
+interpreter with both; there is no silent skip, because a skipped semantic test looks
+exactly like a passing one.
 """
 
 import _selftest_env  # noqa: F401
@@ -21,11 +22,18 @@ import audit_common as ac
 import semantic
 from index import build
 
-VENV = Path.home() / ".dont-forget" / "venv" / "bin" / "python"
+TEST_PYTHON = os.environ.get("DONT_FORGET_TEST_PYTHON", "")
 SCRIPT = Path(__file__).with_name("audit_semantic.py")
-if not VENV.is_file():
-    print(f"SKIP: no plugin venv at {VENV}", file=sys.stderr)
-    sys.exit(0)
+if not TEST_PYTHON or not Path(TEST_PYTHON).is_absolute():
+    print("selftest_audit_semantic: set DONT_FORGET_TEST_PYTHON to an absolute python with "
+          "numpy and scikit-learn", file=sys.stderr)
+    sys.exit(2)
+VENV = Path(TEST_PYTHON)
+probe = subprocess.run([str(VENV), "-c", "import numpy, sklearn"], capture_output=True, text=True)
+if probe.returncode != 0:
+    print(f"selftest_audit_semantic: {VENV} lacks numpy/scikit-learn: {probe.stderr.strip()}",
+          file=sys.stderr)
+    sys.exit(2)
 
 DIM = 32
 
@@ -113,6 +121,7 @@ with tempfile.TemporaryDirectory() as temp:
         ("поправка", "Fact — S", None)], cands["stale"]
     prompt = Path(first["batches"][0]["prompt"]).read_text(encoding="utf-8")
     assert str(run / "batches" / "group0.in.json") in prompt and first["batches"][0]["answer"] in prompt
+    assert "rule_scope" in prompt and "scope_complete" in prompt
 
     SHAPE = {"group": {"keep": False}, "cross": {"keep": False}, "same": {"verdict": "мимо"}, "stale": {"confirmed": False}}
 
@@ -138,6 +147,12 @@ with tempfile.TemporaryDirectory() as temp:
     answer(cross_batch)
     assert "cross0.ann.json" in audit("candidates", ok=False)
 
+    # New rule-scope fields are checked when present; old answers without them still merge.
+    group_batch = first["batches"][0]
+    answer(group_batch, shape={"keep": False, "rule_scope": "maybe", "rule_scope_reason": ""})
+    error = audit("merge", ok=False)
+    assert "rule_scope must be known or unknown" in error, error
+    answer(group_batch)
     for batch in first["batches"]:
         answer(batch)
     merged = audit("merge")
@@ -163,6 +178,22 @@ with tempfile.TemporaryDirectory() as temp:
     batch = json.loads((run / "batches" / "cross0.in.json").read_text(encoding="utf-8"))
     assert [c["key"] for c in batch] == [cands["cross"][0]["key"]], batch
 
+    # The page freezes exactly what was shown: its id changes when a verdict or the
+    # displayed set changes, and the snapshot names the candidates file it came from.
+    page = audit("page")
+    assert page["run_id"] and (run / "page-snapshot.json").is_file(), page
+    snapshot = json.loads((run / "page-snapshot.json").read_text(encoding="utf-8"))
+    assert ac.page_fingerprint(snapshot) == page["run_id"]
+    keys_shown = [item["key"] for item in snapshot["shown"]]
+    assert len(keys_shown) == len(set(keys_shown))
+    assert page["run_id"] in (run / "site" / "data.js").read_text(encoding="utf-8")
+    changed = {"version": 1, "candidates_sha256": "x",
+               "shown": [{"key": "d-" + "1" * 16, "candidate": {}, "verdict": {"v": 1}, "presentation": {}}]}
+    other = json.loads(json.dumps(changed))
+    other["shown"][0]["verdict"]["v"] = 2
+    assert ac.page_fingerprint(changed) != ac.page_fingerprint(other)
+    assert ac.page_fingerprint(changed) == ac.page_fingerprint(json.loads(json.dumps(changed)))
+
     # The venv's python is a symlink to a bare interpreter; started as that bare binary the script
     # still finds its way into the venv, which only sys.prefix can tell apart.
     (Path(os.environ["DONT_FORGET_HOME"]) / "venv").symlink_to(VENV.parent.parent)
@@ -180,5 +211,28 @@ with tempfile.TemporaryDirectory() as temp:
     embed()
     error = audit("candidates", ok=False)
     assert "1 live note(s) with a vector, the audit needs at least two" in error, error
+
+    # The page still opens for a one-note vault: a single dot at the centre, no TSNE crash.
+    run = ac.RUNS / "solo"
+    ac.write_json(run / "candidates.json", {"date": "2026-01-01", "vault": str(vault),
+                                            "group": [], "cross": [], "same": [], "stale": []})
+    page = subprocess.run([str(VENV), str(SCRIPT), "page", "--db", str(db), "--vault", str(vault),
+                           "--run", str(run)], env=os.environ, capture_output=True, text=True)
+    assert page.returncode == 0, page.stderr
+    assert json.loads(page.stdout)["notes"] == 1, page.stdout
+
+    # Zero notes is a valid empty map, not a TSNE or normalization crash.
+    empty_vault, empty_db = root / "empty-vault", root / "empty.db"
+    empty_vault.mkdir()
+    build(empty_vault, empty_db)
+    with sqlite3.connect(semantic.vector_db_path(empty_db)) as connection:
+        connection.execute("CREATE TABLE chunk_vectors (hash TEXT PRIMARY KEY, vector BLOB NOT NULL, dim INTEGER NOT NULL)")
+    empty_run = ac.RUNS / "empty"
+    ac.write_json(empty_run / "candidates.json", {"date": "2026-01-01", "vault": str(empty_vault),
+                                                  "group": [], "cross": [], "same": [], "stale": []})
+    page = subprocess.run([str(VENV), str(SCRIPT), "page", "--db", str(empty_db), "--vault", str(empty_vault),
+                           "--run", str(empty_run)], env=os.environ, capture_output=True, text=True)
+    assert page.returncode == 0, page.stderr
+    assert json.loads(page.stdout)["notes"] == 0, page.stdout
 
 print("selftest_audit_semantic: ok")

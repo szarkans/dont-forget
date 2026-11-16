@@ -8,9 +8,9 @@
   --line: rgba(160, 170, 220, .16);
   --accent: #b9a8ff;
   --warn: #ff8f6b;
-  --font-display: "Unbounded", "Onest", system-ui, sans-serif;
-  --font-body: "Onest", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --font-display: ui-rounded, "Segoe UI", system-ui, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
   color-scheme: dark;
 }
 
@@ -184,9 +184,13 @@ h1 {
 .rows li .row-meta { grid-column: 2; grid-row: 1; padding-top: 0; white-space: normal; min-width: 0; }
 .rows li .row-meta .pill { display: inline-block; max-width: 100%; border-radius: 10px; }
 
-/* Decisions: hidden until the db answers, so a page without storage shows no dead buttons */
-.mark { display: none; gap: 6px; }
-.can-mark .mark { display: grid; gap: 8px; }
+/* Decisions: local marks and a downloaded file; no page storage, no network. */
+.decisions-actions { position: fixed; right: 16px; bottom: 16px; z-index: 20; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: min(92vw, 640px); padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; backdrop-filter: blur(8px); }
+.decisions-actions button, .decisions-actions label { font: inherit; font-size: .82rem; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; cursor: pointer; }
+.decisions-actions button:hover, .decisions-actions label:hover { border-color: rgba(185,168,255,.5); }
+.decisions-actions input { display: none; }
+.decisions-actions span { flex-basis: 100%; color: var(--muted); font-size: .72rem; }
+.mark { display: grid; gap: 8px; }
 .mark-btns { display: flex; flex-wrap: wrap; gap: 6px; }
 .row-main .mark { margin-top: 6px; }
 .mark button {

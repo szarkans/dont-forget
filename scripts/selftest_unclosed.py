@@ -90,7 +90,8 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
         user([{"type": "text", "text": "third"}]),
     ])
 
-    # Three real invocation shapes, all closed.
+    # Neither a slash command nor a Skill call closes a session: only a session note
+    # or an explicit dismissal does.
     write("closed-command", [
         user("first"),
         user("second"),
@@ -120,6 +121,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
     write("nested", turns("a subagent's words"), subagents=True)
 
     expected = {"plain", "close-later", "mention", "skill-wrong", "blocks",
+                "closed-command", "closed-skill",
                 *(f"extra-{n}" for n in range(6))}
 
     # Dismissal is its own log, and the CLI is how it gets written.
@@ -130,9 +132,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
     assert (HOME_DIR / "unclosed-dismissed.jsonl").is_file()
 
     # The session running right now may still be alive: it never lists itself.
-    os.environ["CLAUDE_CODE_SESSION_ID"] = "current"
-    env["CLAUDE_CODE_SESSION_ID"] = "current"
-    sessions = UNCLOSED.scan()
+    sessions = UNCLOSED.scan(current_session_id="current")
     found = {session["session_id"] for session in sessions}
     assert found == expected, (found, expected)
     by_id = {session["session_id"]: session for session in sessions}
@@ -140,18 +140,17 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
     assert len(by_id["plain"]["first_message"]) == 100, by_id["plain"]
     assert [session["mtime"] for session in sessions] == sorted(
         (session["mtime"] for session in sessions), reverse=True)
-    for skipped in ("closed-command", "closed-skill", "closed-log", "sdk", "short",
-                    "dismissed", "current", "fresh", "nested"):
+    for skipped in ("closed-log", "sdk", "short", "dismissed", "current", "fresh", "nested"):
         assert skipped not in found, skipped
     # A second pass is served by the cache and must answer the same.
-    assert {session["session_id"] for session in UNCLOSED.scan()} == expected
+    assert {session["session_id"] for session in UNCLOSED.scan(current_session_id="current")} == expected
 
     assert by_id["blocks"]["user_turns"] == 3, by_id["blocks"]
     assert by_id["blocks"]["first_message"] == "look at this screenshot", by_id["blocks"]
 
     listed = subprocess.run([sys.executable, str(SCRIPT), "--list"], env=env, check=True,
                             capture_output=True, text=True)
-    assert "11 unclosed session(s) in 14 days" in listed.stdout, listed.stdout
+    assert "14 unclosed session(s) in 14 days" in listed.stdout, listed.stdout
     assert str(paths["plain"]) in listed.stdout, listed.stdout
 
     # A summary read of another session only marks it as closing: the audit can be
@@ -168,10 +167,10 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
 
     (root / "vault").mkdir()
 
-    def vault_write(filename: str, content: str) -> dict:
+    def vault_write(filename: str, content: str, **extra) -> dict:
         done = subprocess.run(
             [sys.executable, str(SCRIPTS / "vault-write.py"), "--vault", str(root / "vault")],
-            input=json.dumps({"filename": filename, "content": content}), env=env,
+            input=json.dumps({"filename": filename, "content": content, **extra}), env=env,
             check=True, capture_output=True, text=True)
         return json.loads(done.stdout)
 
@@ -181,11 +180,13 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
     assert closing_log.read_text(encoding="utf-8").strip(), "a non-session note moved it"
     assert "close-later" in {session["session_id"] for session in UNCLOSED.scan()}
 
-    # The session note is the closure: after it lands the pending file is empty and the
-    # session is gone from both the closed log and the digest.
-    assert vault_write("Session — 2026-10-27 close-later.md",
-                       "---\ntype: session\ndate: 2026-10-27\n---\n# S\n\n[[hub]]\n"
-                       )["status"] == "created"
+    # A historical audit names its source explicitly: the active session is "current",
+    # not "close-later". Only the audited session disappears from the digest.
+    saved = vault_write("Session — 2026-10-27 close-later.md",
+                        "---\ntype: session\ndate: 2026-10-27\n---\n# S\n\n[[hub]]\n",
+                        session_id="close-later")
+    assert saved["status"] == "created", saved
+    assert saved["session_closure"] == {"session_id": "close-later", "status": "closed"}, saved
     assert closing_log.read_text(encoding="utf-8") == ""
     entries = [json.loads(line) for line in closed_log.read_text(encoding="utf-8").splitlines()]
     recorded = [entry for entry in entries if entry["session_id"] == "close-later"]
@@ -200,23 +201,25 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
     self_dir = projects / str(workdir.resolve()).replace("/", "-").replace(".", "-")
     self_dir.mkdir()
     (self_dir / "self.jsonl").write_text(
-        json.dumps(user("closing myself")) + "\n", encoding="utf-8")
+        json.dumps({**user("closing myself"), "sessionId": "self"}) + "\n", encoding="utf-8")
     closed_before = closed_log.read_text(encoding="utf-8")
-    subprocess.run([sys.executable, str(TRANSCRIPT)], cwd=workdir, env=env, check=True,
-                   capture_output=True)
-    assert closing_log.read_text(encoding="utf-8") == ""
+    summary = subprocess.run([sys.executable, str(TRANSCRIPT), "--harness", "claude", "--session", "self"],
+                             cwd=workdir, env=env, check=True, capture_output=True, text=True)
+    assert json.loads(summary.stdout)["audit_session_id"] == "self", summary.stdout
+    assert "self" in {json.loads(line)["session_id"] for line in closing_log.read_text().splitlines()}
     assert closed_log.read_text(encoding="utf-8") == closed_before
 
     # The digest carries the section, capped at five, with the pointer to the rest.
     hook = subprocess.run([sys.executable, str(HOT_SCAN), "--db", str(root / "missing.db"),
-                           "--project", "", "--hook"], env=env, check=True,
+                           "--project", "", "--hook", "--harness", "claude"], env=env,
+                          input=json.dumps({"session_id": "current", "hook_event_name": "SessionStart",
+                                            "cwd": str(root)}), check=True,
                           capture_output=True, text=True)
     context = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
-    assert "Unclosed sessions — 10 in 14 days" in context, context
-    assert "`transcript.py --path <path>`" in context, context
+    assert "Unclosed sessions — 12 in 14 days" in context, context
+    assert "--harness claude --session" in context, context
     assert context.count("\n- ") == 5, context
-    assert ('The rest: `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/unclosed.py" --list`.'
-            in context), context
+    assert (f"The rest: `python3 {SCRIPT.resolve()} --list`." in context), context
     assert '— "the digest says /dont-forget:session is the way"' in context, context
 
     # A cold scan stopped by its deadline says how many files it never read, and the
@@ -239,8 +242,69 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-unclosed-") as tmp:
     empty_home = root / "empty-home"
     empty_home.mkdir()
     empty = subprocess.run([sys.executable, str(HOT_SCAN), "--db", str(root / "missing.db"),
-                            "--project", "", "--hook"], env={**env, "HOME": str(empty_home)},
+                            "--project", "", "--hook", "--harness", "claude"],
+                           env={**env, "HOME": str(empty_home)}, input="{}",
                            check=True, capture_output=True, text=True)
     assert "Unclosed sessions" not in empty.stdout, empty.stdout
+
+# OMP discovery: role markers are authoritative only for the matching session id; an
+# unmarked or contradictory session is shown as unclassified, never as a proven root.
+with tempfile.TemporaryDirectory(prefix="dont-forget-omp-discovery-") as tmp:
+    root = Path(tmp)
+    previous_config = os.environ.get("PI_CONFIG_DIR")
+    os.environ["PI_CONFIG_DIR"] = str(root)
+    os.environ.pop("OMP_PROFILE", None)
+    os.environ.pop("PI_PROFILE", None)
+    UNCLOSED.PROJECTS = root / "empty-projects"
+    folder = root / "agent/sessions/p"
+    folder.mkdir(parents=True)
+    old = time.time() - 3600
+
+    def omp_write(session_id, markers=()):
+        rows = [{"type": "title", "title": session_id},
+                {"type": "session", "version": 3, "id": session_id, "cwd": "/work/omp"}]
+        for number in range(3):
+            rows.append({"type": "message", "id": f"u{number}", "parentId": f"u{number-1}" if number else None,
+                         "message": {"role": "user", "content": f"{session_id} question {number}"}})
+        for number, kind in enumerate(markers):
+            rows.append({"type": "custom", "customType": "dont-forget.session-role",
+                         "id": f"m{number}", "parentId": "u2",
+                         "data": {"v": 1, "session_id": session_id, "kind": kind}})
+        path = folder / f"2026-11-03T10-00-00_{session_id}.jsonl"
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        os.utime(path, (old, old))
+        return path
+
+    omp_write("orphan")
+    omp_write("sub", ["sub"])
+    omp_write("main", ["main"])
+    conflict = omp_write("conflict", ["main", "sub"])
+    stats = {}
+    sessions = UNCLOSED.scan(stats=stats)
+    by_id = {session["session_id"]: session for session in sessions}
+    assert {"omp:orphan", "omp:main", "omp:conflict"} <= set(by_id), by_id
+    assert "omp:sub" not in by_id, by_id
+    assert by_id["omp:orphan"].get("unclassified") and by_id["omp:conflict"].get("unclassified"), by_id
+    assert not by_id["omp:main"].get("unclassified"), by_id
+    assert stats["unclassified"] == 2, stats
+    assert any("conflicting role markers" in error for error in stats["errors"]), stats["errors"]
+    # A role marker belonging to another session cannot classify this one.
+    foreign = folder / "2026-11-03T10-00-00_foreign.jsonl"
+    rows = [json.loads(line) for line in conflict.read_text().splitlines()]
+    for row in rows:
+        if row.get("type") == "session":
+            row["id"] = "foreign"
+        if row.get("customType") == "dont-forget.session-role":
+            row["data"]["session_id"] = "somebody-else"
+    foreign.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+    os.utime(foreign, (old, old))
+    stats = {}
+    sessions = UNCLOSED.scan(stats=stats)
+    assert any(session["session_id"] == "omp:foreign" and session.get("unclassified")
+               for session in sessions), sessions
+    if previous_config is None:
+        os.environ.pop("PI_CONFIG_DIR", None)
+    else:
+        os.environ["PI_CONFIG_DIR"] = previous_config
 
 print("ok")

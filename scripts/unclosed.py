@@ -16,13 +16,25 @@ import argparse
 import datetime
 import json
 import os
+import sqlite3
+import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from common import HOME_DIR
+from session_sources import (active_session_identity, claude_projects, codex_root, codex_session,
+                             opencode_session, opencode_sessions, omp_root, omp_session,
+                             parse_rollout_name, resolve_codex_thread, session_facts,
+                             validate_session_id)
 
-PROJECTS = Path.home() / ".claude" / "projects"
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+PROJECTS = claude_projects()
 CACHE = HOME_DIR / "unclosed-cache.json"
 CLOSING = HOME_DIR / "closing-sessions.jsonl"
 CLOSED = HOME_DIR / "closed-sessions.jsonl"
@@ -34,10 +46,7 @@ DAYS = 14
 STALE = 30 * 60
 MIN_TURNS = 3
 MESSAGE_CHARS = 100
-CACHE_VERSION = 1
-
-CLOSE_COMMAND = "<command-name>/dont-forget:session"
-CLOSE_SKILL = "dont-forget:session"
+CACHE_VERSION = 3
 
 
 def _recorded(log: Path) -> set[str]:
@@ -55,50 +64,89 @@ def _recorded(log: Path) -> set[str]:
     return ids
 
 
-def record_pending(path: Path, log: Path = CLOSING) -> None:
-    """Note that this transcript is being audited; the session note is what closes it.
-
-    A summary read can be abandoned halfway, so `--path` records a pending entry only.
-    A write of a `type: session` note moves every pending entry to closed-sessions.jsonl.
-    """
-    session_id = path.stem
-    if session_id in _recorded(CLOSED) or session_id in _recorded(log):
-        return
-    entry = {"session_id": session_id, "path": str(path),
-             "ts": datetime.datetime.now().isoformat(timespec="seconds")}
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
-def close_pending(pending_log: Path = CLOSING, closed_log: Path = CLOSED) -> None:
-    """Move audited sessions into the closed log once their session note is written.
-
-    The move is all-or-nothing: the pending file is emptied only after every readable
-    entry has been appended, so a failed append leaves the work offerable again.
-    """
-    try:
-        lines = pending_log.read_text(encoding="utf-8", errors="replace").splitlines()
-    except FileNotFoundError:
-        return
-    known, entries = _recorded(closed_log), []
-    for line in lines:
+@contextmanager
+def _pending_lock(pending_log: Path):
+    """Serialize registrations and closes on a stable inode, not the replaced log."""
+    pending_log.parent.mkdir(parents=True, exist_ok=True)
+    with pending_log.with_name(f".{pending_log.name}.lock").open("a+b") as lock:
+        if os.name == "nt":
+            lock.seek(0)
+            if not lock.read(1):
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(lock, fcntl.LOCK_EX)
         try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(entry, dict) or not entry.get("session_id"):
-            continue
-        if entry["session_id"] in known:
-            continue
-        known.add(entry["session_id"])
-        entries.append(entry)
-    if entries:
-        closed_log.parent.mkdir(parents=True, exist_ok=True)
-        with closed_log.open("a", encoding="utf-8") as handle:
-            for entry in entries:
-                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    pending_log.write_text("", encoding="utf-8")
+            yield
+        finally:
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def record_pending(path: str | Path, log: Path = CLOSING, session_id: str | None = None,
+                   *, closed_log: Path = CLOSED) -> None:
+    """Register an audit; only a session note for this exact id can close it."""
+    session_id = validate_session_id(session_id or Path(path).stem)
+    with _pending_lock(log):
+        if session_id in _recorded(closed_log) or session_id in _recorded(log):
+            return
+        entry = {"session_id": session_id, "path": str(path),
+                 "ts": datetime.datetime.now().isoformat(timespec="seconds")}
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def close_pending(session_id: str, pending_log: Path = CLOSING,
+                  closed_log: Path = CLOSED) -> str:
+    """Close one canonical id, returning closed, already-closed, or not-pending.
+
+    Append before removing the matching pending rows, under the registration lock.
+    A failed append leaves them pending; a failed replacement can be retried without
+    duplicating the closed entry. Unrelated rows, including damaged ones, are preserved.
+    """
+    session_id = validate_session_id(session_id)
+    with _pending_lock(pending_log):
+        known = session_id in _recorded(closed_log)
+        try:
+            lines = pending_log.read_bytes().splitlines(keepends=True)
+        except FileNotFoundError:
+            return "already-closed" if known else "not-pending"
+        remaining, matching = [], None
+        for line in lines:
+            try:
+                entry = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                entry = None
+            if isinstance(entry, dict) and entry.get("session_id") == session_id:
+                matching = matching or entry
+            else:
+                remaining.append(line)
+        if matching is None:
+            return "already-closed" if known else "not-pending"
+        if not known:
+            closed_log.parent.mkdir(parents=True, exist_ok=True)
+            with closed_log.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(matching, ensure_ascii=False) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=pending_log.parent, prefix=".closing-",
+                                             delete=False) as handle:
+                temporary = Path(handle.name)
+                handle.writelines(remaining)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, pending_log)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        return "already-closed" if known else "closed"
 
 
 def _user_text(content) -> str | None:
@@ -117,18 +165,18 @@ def _user_text(content) -> str | None:
 
 
 def facts(path: Path) -> dict:
-    """The few things the digest needs from one transcript.
+    """The few things the digest needs from one Claude transcript.
 
-    Only user lines and lines that might carry a Skill call are parsed: the rest is tool
-    payload and attachments, which is the bulk of a real transcript and none of the answer.
+    Only user lines are parsed: the rest is tool payload and attachments, which is the
+    bulk of a real transcript and none of the answer. A skill invocation is not evidence
+    that the audit happened — only a session note or an explicit dismissal closes a
+    session — so this reads words, not commands.
     """
     found = {"session_id": path.stem, "cwd": "", "entrypoint": "", "first_message": "",
              "user_turns": 0, "closed": False}
     with path.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
-            maybe_user = '"user"' in line
-            maybe_skill = '"Skill"' in line and '"tool_use"' in line
-            if not (maybe_user or maybe_skill):
+            if '"user"' not in line:
                 continue
             try:
                 entry = json.loads(line)
@@ -136,27 +184,18 @@ def facts(path: Path) -> dict:
                 continue
             if entry.get("sessionId"):
                 found["session_id"] = entry["sessionId"]
+            if entry.get("type") != "user":
+                continue
+            found["cwd"] = found["cwd"] or entry.get("cwd") or ""
+            found["entrypoint"] = found["entrypoint"] or entry.get("entrypoint") or ""
             message = entry.get("message")
             content = message.get("content") if isinstance(message, dict) else None
-            if entry.get("type") == "user":
-                found["cwd"] = found["cwd"] or entry.get("cwd") or ""
-                found["entrypoint"] = found["entrypoint"] or entry.get("entrypoint") or ""
-                text = _user_text(content)
-                if text is None:
-                    continue
-                if CLOSE_COMMAND in text:
-                    found["closed"] = True
-                elif not entry.get("isMeta") and not text.startswith("<"):
-                    found["user_turns"] += 1
-                    if not found["first_message"]:
-                        found["first_message"] = " ".join(text.split())[:MESSAGE_CHARS]
-            elif maybe_skill and entry.get("type") == "assistant":
-                for block in content if isinstance(content, list) else []:
-                    if not isinstance(block, dict) or block.get("type") != "tool_use":
-                        continue
-                    arguments = block.get("input") if isinstance(block.get("input"), dict) else {}
-                    if block.get("name") == "Skill" and arguments.get("skill") == CLOSE_SKILL:
-                        found["closed"] = True
+            text = _user_text(content)
+            if text is None or entry.get("isMeta") or text.startswith("<"):
+                continue
+            found["user_turns"] += 1
+            if not found["first_message"]:
+                found["first_message"] = " ".join(text.split())[:MESSAGE_CHARS]
     return found
 
 
@@ -171,18 +210,21 @@ def _load_cache(path: Path = CACHE) -> dict:
     return files if isinstance(files, dict) else {}
 
 
-def _save_cache(files: dict, path: Path = CACHE) -> None:
+def _save_cache_safe(files: dict, stats: dict) -> None:
+    """A cache write failure costs the next scan time, not the list in this one."""
     temporary = None
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".unclosed-",
+        CACHE.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=CACHE.parent, prefix=".unclosed-",
                                          delete=False) as handle:
             temporary = Path(handle.name)
             handle.write(json.dumps({"version": CACHE_VERSION, "files": files},
                                     ensure_ascii=False).encode("utf-8"))
-        os.replace(temporary, path)
-    except OSError:
-        pass
+        os.replace(temporary, CACHE)
+    except OSError as error:
+        message = f"unclosed-session cache could not be written: {error}"
+        stats["errors"].append(message)
+        print(f"dont-forget: {message}", file=sys.stderr)
     finally:
         if temporary is not None:
             try:
@@ -191,8 +233,80 @@ def _save_cache(files: dict, path: Path = CACHE) -> None:
                 pass
 
 
+def _cache_entry(cache: dict, key: str, stamp: tuple) -> dict | None:
+    entry = cache.get(key)
+    if entry and entry.get("mtime") == stamp[0] and entry.get("size") == stamp[1]:
+        return entry
+    return None
+
+
+def _codex_groups(cutoff: float, before: float) -> tuple[list[dict], list[str]]:
+    """One selected rollout per stable thread, plus visible ambiguity diagnostics."""
+    groups: dict[str, list[Path]] = {}
+    errors: list[str] = []
+    root = codex_root()
+    if not root.is_dir():
+        return [], errors
+    try:
+        paths = list(root.rglob("rollout-*"))
+    except OSError as error:
+        errors.append(f"Codex session store could not be read: {root}: {error}")
+        return [], errors
+    for path in paths:
+        if path.suffix not in (".jsonl", ".zst") or not path.is_file():
+            continue
+        identity = parse_rollout_name(path.name)
+        if identity is None:
+            continue
+        try:
+            stat = path.stat()
+        except OSError as error:
+            errors.append(f"Codex rollout could not be read: {path}: {error}")
+            continue
+        if not cutoff <= stat.st_mtime <= before:
+            continue
+        groups.setdefault(identity[0], []).append(path)
+    candidates = []
+    for thread, paths in groups.items():
+        try:
+            selected = resolve_codex_thread(thread)
+        except ValueError as error:
+            errors.append(f"Codex thread {thread}: {error}")
+            continue
+        try:
+            stat = selected.stat()
+        except OSError as error:
+            errors.append(f"Codex rollout could not be read: {selected}: {error}")
+            continue
+        if cutoff <= stat.st_mtime <= before:
+            candidates.append({"path": str(selected), "mtime": stat.st_mtime,
+                               "size": stat.st_size, "thread": thread})
+    return candidates, errors
+
+
+def _omp_candidates(cutoff: float, before: float) -> tuple[list[dict], list[str]]:
+    candidates, errors = [], []
+    root = omp_root()
+    if not root.is_dir():
+        return candidates, errors
+    try:
+        paths = list(root.glob("*/*.jsonl"))
+    except OSError as error:
+        errors.append(f"OMP session store could not be read: {root}: {error}")
+        return candidates, errors
+    for path in paths:
+        try:
+            stat = path.stat()
+        except OSError as error:
+            errors.append(f"OMP transcript could not be read: {path}: {error}")
+            continue
+        if cutoff <= stat.st_mtime <= before:
+            candidates.append({"path": str(path), "mtime": stat.st_mtime, "size": stat.st_size})
+    return candidates, errors
+
+
 def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = None,
-         stats: dict | None = None) -> list[dict]:
+         stats: dict | None = None, *, current_session_id: str | None = None) -> list[dict]:
     """Unclosed interactive sessions of the window, newest first.
 
     A cache per path keyed by (mtime, size) is what keeps the startup digest inside its
@@ -200,21 +314,52 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
     every time, and anything coarser would keep reading files that have not moved.
     `seconds` caps the reading on a cold cache; what is left is read on the next start,
     and `stats["unscanned"]` says how many files that cap skipped, so a short list is
-    never mistaken for the whole one.
+    never mistaken for the whole one. Discovery failures are reported, never rendered as
+    "nothing was there".
+
+    Only `current_session_id` is excluded: a parent's inherited variables name another
+    session and must not hide a real one.
     """
+    include_other = root is None
     root = root or PROJECTS
-    if stats is not None:
-        stats["unscanned"] = 0
+    if stats is None:
+        stats = {}
+    stats.setdefault("unscanned", 0)
+    stats.setdefault("errors", [])
+    stats.setdefault("unclassified", 0)
     now = time.time()
     cutoff = now - days * 86400
-    current = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     closed = _recorded(CLOSED)
     dismissed = _recorded(DISMISSED)
     cache = _load_cache()
     deadline = now + seconds if seconds is not None else None
     files: dict[str, dict] = {}
     out: list[dict] = []
-    for path in root.glob("*/*.jsonl"):
+
+    def fresh(key: str, stamp: tuple, build) -> dict | None:
+        entry = _cache_entry(cache, key, stamp)
+        if entry is not None:
+            files[key] = entry
+            return entry
+        if deadline is not None and time.time() > deadline:
+            stats["unscanned"] += 1
+            return None
+        try:
+            entry = build()
+        except (OSError, ValueError, sqlite3.Error) as error:
+            stats["errors"].append(f"{key}: {error}")
+            print(f"dont-forget: cannot read {key}: {error}", file=sys.stderr)
+            return None
+        entry["mtime"], entry["size"] = stamp
+        files[key] = entry
+        return entry
+
+    try:
+        claude_paths = list(root.glob("*/*.jsonl"))
+    except OSError as error:
+        stats["errors"].append(f"Claude session store could not be read: {root}: {error}")
+        claude_paths = []
+    for path in claude_paths:
         try:
             stat = path.stat()
         except OSError:
@@ -222,28 +367,63 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
         if not path.is_file() or stat.st_mtime < cutoff or stat.st_mtime > now - STALE:
             continue
         key = str(path)
-        entry = cache.get(key)
-        if not (entry and entry.get("mtime") == stat.st_mtime and entry.get("size") == stat.st_size):
-            if deadline is not None and time.time() > deadline:
-                if stats is not None:
-                    stats["unscanned"] += 1
-                continue
-            try:
-                entry = facts(path)
-            except OSError:
-                continue
-            entry["mtime"], entry["size"] = stat.st_mtime, stat.st_size
-        files[key] = entry
+        entry = fresh(key, (stat.st_mtime, stat.st_size), lambda path=path: facts(path))
+        if entry is None:
+            continue
         if entry.get("entrypoint") != "cli" or entry.get("user_turns", 0) < MIN_TURNS:
             continue
         if entry["session_id"] in closed or entry["session_id"] in dismissed:
             continue
-        if entry["session_id"] == current or entry.get("closed"):
+        if entry["session_id"] == current_session_id:
             continue
-        out.append({"session_id": entry["session_id"], "path": key, "mtime": stat.st_mtime,
-                    "cwd": entry.get("cwd", ""), "first_message": entry.get("first_message", ""),
+        out.append({"session_id": entry["session_id"], "harness": "claude", "path": key,
+                    "mtime": stat.st_mtime, "cwd": entry.get("cwd", ""),
+                    "first_message": entry.get("first_message", ""),
                     "user_turns": entry["user_turns"]})
-    _save_cache(files)
+
+    if include_other:
+        omp, omp_errors = _omp_candidates(cutoff, now - STALE)
+        codex, codex_errors = _codex_groups(cutoff, now - STALE)
+        stats["errors"].extend(omp_errors + codex_errors)
+        candidates = omp + codex
+        try:
+            candidates.extend(opencode_sessions(cutoff, now - STALE))
+        except (OSError, sqlite3.Error, ValueError) as error:
+            stats["errors"].append(f"OpenCode session discovery failed: {error}")
+            print(f"dont-forget: OpenCode session discovery failed: {error}", file=sys.stderr)
+        for candidate in sorted(candidates, key=lambda item: item["mtime"], reverse=True):
+            key = candidate["path"]
+            stamp = (candidate["mtime"], candidate.get("size"))
+
+            def build(candidate=candidate, key=key):
+                if key.startswith("opencode://"):
+                    return session_facts(opencode_session(key.removeprefix("opencode://")))
+                if "thread" in candidate:
+                    return session_facts(codex_session(Path(key)))
+                return session_facts(omp_session(Path(key)))
+
+            entry = fresh(key, stamp, build)
+            if entry is None:
+                continue
+            canonical = entry["session_id"]
+            if canonical in closed or canonical in dismissed or canonical == current_session_id:
+                continue
+            if entry["user_turns"] < MIN_TURNS:
+                continue
+            if entry["harness"] == "omp":
+                if entry.get("role") == "sub":
+                    continue
+                if entry.get("role") is None:
+                    if entry.get("role_conflict"):
+                        stats["errors"].append(
+                            f"OMP session {canonical} has conflicting role markers; classified unknown")
+                    stats["unclassified"] += 1
+                    out.append({**entry, "path": key, "unclassified": True})
+                    continue
+            elif entry.get("entrypoint") not in ("cli", "vscode"):
+                continue
+            out.append({**entry, "path": key})
+    _save_cache_safe(files, stats)
     out.sort(key=lambda session: (session["mtime"], session["path"]), reverse=True)
     return out
 
@@ -257,6 +437,14 @@ def dismiss(session_id: str, reason: str = "", log: Path = DISMISSED) -> dict:
     return entry
 
 
+def _current_identity() -> str | None:
+    """The canonical id of this process's own session, or None when not unambiguous."""
+    harness, identity = active_session_identity()
+    if not identity or harness == "unknown":
+        return None
+    return identity if harness == "claude" else f"{harness}:{identity}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="list sessions that never ran the session skill")
     parser.add_argument("--list", action="store_true", help="one line per session, newest first")
@@ -267,21 +455,28 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.dismiss:
-        print(json.dumps(dismiss(args.dismiss, args.reason), ensure_ascii=False))
-        if not args.list:
+        print(json.dumps(dismiss(validate_session_id(args.dismiss), args.reason), ensure_ascii=False))
+        if not args.list and not args.json:
             return
     if not (args.list or args.json):
         parser.print_help()
         return
 
-    sessions = scan(days=args.days)
+    stats: dict = {}
+    sessions = scan(days=args.days, stats=stats, current_session_id=_current_identity())
     if args.json:
-        print(json.dumps(sessions, ensure_ascii=False, indent=2))
+        print(json.dumps({"sessions": sessions, "errors": stats.get("errors", []),
+                          "unscanned": stats.get("unscanned", 0),
+                          "unclassified": stats.get("unclassified", 0)},
+                         ensure_ascii=False, indent=2))
         return
     for session in sessions:
         day = datetime.datetime.fromtimestamp(session["mtime"]).strftime("%Y-%m-%d")
-        print(f"{day}  {session['cwd']}  {session['first_message']}  {session['path']}")
+        kind = "unclassified" if session.get("unclassified") else session.get("entrypoint", "")
+        print(f"{day}  {kind}  {session['cwd']}  {session['first_message']}  {session['path']}")
     print(f"{len(sessions)} unclosed session(s) in {args.days} days")
+    for error in stats.get("errors", []):
+        print(f"dont-forget: {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":

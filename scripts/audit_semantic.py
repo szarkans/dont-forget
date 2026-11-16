@@ -95,15 +95,19 @@ def load(db: Path, vault: Path):
     return notes, neighbours
 
 
-def pool_matrix(notes: dict):
+def pool_matrix(notes: dict, *, allow_small: bool = False):
     """Live notes of the pool types, and their vectors centred on the mean of that set.
 
     Granite's raw cosines sit packed near 0.85, so nearest neighbours mean little until the
     shared direction is taken out. Leads count toward the centre but are not candidates.
+    A page still opens for an empty or one-note vault: `allow_small` returns `(pool, None)`
+    instead of inventing a matrix TSNE cannot fit.
     """
     live = [n for n in notes.values() if "v" in n and n["type"] in POOL_TYPES and not n["died"]]
     pool = [n for n in live if n["type"] != "lead"]
     if len(pool) < 2:
+        if allow_small:
+            return pool, None
         raise SystemExit(f"{len(pool)} live note(s) with a vector, the audit needs at least two to compare: "
                          "run index.py --embed, or wait for the vault to grow")
     centre = np.mean([n["v"] for n in live], 0)
@@ -275,6 +279,11 @@ def misshapen(kind: str, answer: dict) -> str | None:
         return f"verdict must be one of {', '.join(ac.SAME_VERDICTS)}, got {answer.get('verdict')!r}"
     if kind == "stale" and not isinstance(answer.get("confirmed"), bool):
         return f"confirmed must be true or false, got {answer.get('confirmed')!r}"
+    if kind in ("group", "cross") and "rule_scope" in answer:
+        if answer["rule_scope"] not in ("known", "unknown"):
+            return f"rule_scope must be known or unknown, got {answer['rule_scope']!r}"
+        if not isinstance(answer.get("rule_scope_reason"), str):
+            return "rule_scope_reason must be a string when rule_scope is present"
     return None
 
 
@@ -323,14 +332,21 @@ def russian_date(iso: str) -> str:
 def cmd_page(args) -> dict:
     from sklearn.manifold import TSNE
     run = args.run or ac.latest_run()
-    cands = json.loads((run / "candidates.json").read_text(encoding="utf-8"))
+    candidates_path = run / "candidates.json"
+    raw_candidates = candidates_path.read_bytes()
+    cands = json.loads(raw_candidates)
     vault = args.vault or Path(cands["vault"])
     sorted_ = ac.sort_findings(cands, ac.load_verdicts())
     notes, neighbours = load(args.db, vault)
-    pool, m = pool_matrix(notes)
-    xy = TSNE(n_components=2, metric="cosine", perplexity=max(1.0, min(30.0, len(pool) - 1.0)), init="pca",
-              random_state=7).fit_transform(m)
-    xy = (xy - xy.min(0)) / np.where(np.ptp(xy, 0) > 0, np.ptp(xy, 0), 1)
+    pool, m = pool_matrix(notes, allow_small=True)
+    if m is None:
+        # TSNE cannot fit an empty map or one point; a point at the centre is the honest
+        # picture, and off-map findings still keep their dot.
+        xy = np.array([[0.5, 0.5]]) if pool else np.empty((0, 2))
+    else:
+        xy = TSNE(n_components=2, metric="cosine", perplexity=max(1.0, min(30.0, len(pool) - 1.0)), init="pca",
+                  random_state=7).fit_transform(m)
+        xy = (xy - xy.min(0)) / np.where(np.ptp(xy, 0) > 0, np.ptp(xy, 0), 1)
     clean = lambda t: t.split(" — ", 1)[-1]
     shown = [{"t": clean(n["title"]), "p": n["project"], "k": n["type"] if n["type"] == "godnote" else n["kind"],
               "x": round(float(x), 4), "y": round(float(y), 4)} for n, (x, y) in zip(pool, xy)]
@@ -338,7 +354,7 @@ def cmd_page(args) -> dict:
     by_path = {n["path"]: n for n in notes.values()}
 
     def at(note: dict) -> int:
-        """A finding may name a note the map does not hold (a died or vectorless one): it gets an off-map dot."""
+        """A finding may name a note the map does not hold: it gets an off-map dot."""
         if note["path"] not in index:
             index[note["path"]] = len(shown)
             shown.append({"t": clean(note["title"]), "p": note["project"], "k": "", "x": None, "y": None})
@@ -350,9 +366,21 @@ def cmd_page(args) -> dict:
         if c["kind"] == "group":
             ids = [at(x) for x in c["members"]]
             node = {x["path"]: by_path[x["path"]]["id"] for x in c["members"] if x["path"] in by_path}
+            # A reader that did not see the whole rule scope is not evidence that a rule
+            # already exists: say "not checked" instead of claiming "already in rules".
+            scope = v.get("rule_scope")
+            if scope != "known":
+                badge = "правила не проверены"
+            elif v.get("ripe"):
+                badge = "созрело до правила"
+            elif v.get("rule_file"):
+                badge = "уже в правилах"
+            else:
+                badge = "новая godnote"
             groups.append({"key": c["key"], "name": v.get("name") or "", "thesis": v.get("thesis") or "",
-                           "members": ids, "badge": "созрело до правила" if v.get("ripe")
-                           else "уже в правилах" if v.get("rule_file") else "новая godnote",
+                           "members": ids, "badge": badge,
+                           "rule_scope": scope if scope in ("known", "unknown") else "unknown",
+                           "rule_scope_reason": v.get("rule_scope_reason") or "",
                            "linked_pairs": sum(1 for x in node.values() for y in node.values()
                                                if x < y and y in neighbours[x])})
             continue
@@ -371,7 +399,22 @@ def cmd_page(args) -> dict:
                          "new": new_side})
     groups.sort(key=lambda g: (g["badge"] != "созрело до правила", -len(g["members"])))
     disputes.sort(key=lambda d: rank[d["verdict"]])
-    data = {"date": russian_date(cands["date"]), "notes": shown,
+
+    # The snapshot is the page, not the run: changing a verdict, what is shown, or the
+    # words on a card must change the id a decisions file points at.
+    presentation = {item["key"]: item for item in (*groups, *disputes)}
+    shown_findings = []
+    for c, v in sorted_["page"]:
+        verdict = {key: value for key, value in v.items() if key != "decided"}
+        shown_findings.append({"key": c["key"], "candidate": ac.note_shas(c),
+                               "verdict": verdict, "presentation": presentation.get(c["key"])})
+    snapshot = {"version": 1,
+                "candidates_sha256": hashlib.sha256(raw_candidates).hexdigest(),
+                "shown": shown_findings}
+    run_id = ac.page_fingerprint(snapshot)
+    ac.write_json(run / "page-snapshot.json", snapshot)
+    data = {"date": russian_date(cands["date"]), "notes": shown, "run_id": run_id,
+            "finding_keys": [item["key"] for item in shown_findings],
             "stats": {"notes": len(pool), "groups": len(groups), "links": len(sorted_["safe"]), "disputes": len(disputes)},
             "dropped": sorted_["dropped"], "godnotes": groups, "disputes": disputes}
     site = run / "site"
@@ -379,7 +422,8 @@ def cmd_page(args) -> dict:
         shutil.rmtree(site)
     shutil.copytree(SITE, site)
     (site / "data.js").write_text("window.AUDIT = " + json.dumps(data, ensure_ascii=False) + ";\n", encoding="utf-8")
-    return {"site": str(site / "index.html"), **data["stats"], "unread": sorted_["unread"], "dropped": sorted_["dropped"]}
+    return {"site": str(site / "index.html"), "run_id": run_id,
+            **data["stats"], "unread": sorted_["unread"], "dropped": sorted_["dropped"]}
 
 
 def main() -> None:
