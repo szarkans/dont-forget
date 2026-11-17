@@ -170,6 +170,13 @@ A vault rich in the surrounding topic will otherwise answer a question it was ne
 asked. The vault may simply word the subject differently, so say the word is missing,
 not that the work never happened.
 
+`budget_limited: true` means the byte budget cut more fragments than it returned — you
+are looking at a slice of the matching material, not the answerable whole. The paired
+`budget_next_step` line says what may help: retry with a narrower query, or open the
+returned notes in full. Treat it as a suggestion, not a command: if the returned
+fragments already settle the question, answer from them and move on; if they do not,
+say the coverage was partial before acting on it.
+
 `returned_by_link` counts fragments reached through links rather than text; they are
 neighbours of the fragments above them and are weaker evidence. `expanded_notes` and
 `graph_neighbor_notes` are the scale of that traversal — mention them in passing at

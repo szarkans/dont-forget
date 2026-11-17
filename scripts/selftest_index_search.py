@@ -686,4 +686,28 @@ with tempfile.TemporaryDirectory() as tmp:
     assert flat["coverage"]["pool_examined"] == 4, flat["coverage"]
     assert flat["coverage"]["best_mass_share"] == 1.0, flat["coverage"]
 
+# A query whose fragments mostly lose the byte budget reports it instead of looking
+# answered: budget_limited flags the slice and budget_next_step says what to try.
+with tempfile.TemporaryDirectory() as tmp:
+    home = Path(tmp)
+    vault = home / "vault"
+    vault.mkdir()
+    for n in range(20):
+        (vault / f"note-{n}.md").write_text(
+            f"# Note {n}\n\nsliceword. A few words of padding. " * 4 + "\n")
+    narrow_budget = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "sliceword",
+         "--scope", "all", "--budget", "1200",
+         "--vault", str(vault), "--db", str(home / "narrow.db")],
+        capture_output=True, text=True, check=True)
+    narrow = json.loads(narrow_budget.stdout)["coverage"]
+    assert narrow["budget_limited"] is True, narrow
+    assert "narrower query" in narrow["budget_next_step"], narrow
+    wide_budget = subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("search.py")), "sliceword",
+         "--scope", "all", "--vault", str(vault), "--db", str(home / "wide.db")],
+        capture_output=True, text=True, check=True)
+    wide = json.loads(wide_budget.stdout)["coverage"]
+    assert "budget_limited" not in wide, wide
+
 print("ok")

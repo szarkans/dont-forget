@@ -461,6 +461,15 @@ def search(query: str, budget: int = 8000, hub_cap: int = 30, db_path: Path = DE
                 item["type"] == "lead" for item in result["fragments"])
             answer_fragments = result["fragments"]
         result["coverage"]["weak_match"] = not _supports_answer(text_supported, answer_fragments)
+        returned = result["coverage"]["returned"]
+        dropped = result["coverage"]["dropped_by_budget"]
+        if dropped >= 10 and dropped > returned * 2:
+            result["coverage"]["budget_limited"] = True
+            result["coverage"]["budget_next_step"] = (
+                "More fragments were cut by the byte budget than returned — you are "
+                "seeing a slice, not the whole answer. If these do not settle the "
+                "question, retry with a narrower query or open the returned notes "
+                "in full.")
         result["coverage"]["semantic"] = semantic_result["semantic"]
         result["coverage"]["semantic_worker"] = semantic_result.get("worker")
         if semantic_result.get("old_vector_files"):
