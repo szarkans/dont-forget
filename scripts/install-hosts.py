@@ -30,8 +30,11 @@ from pathlib import Path
 from session_sources import omp_agent_dir
 
 ROOT = Path(__file__).resolve().parent.parent
-REFERENCES = {"about": "about", "this": "that", "session": "session", "review": "audit",
-              "setup": "setup", "checkup": "health", "him-please": "him-please"}
+# The command catalog is the single list of user-facing `dont-forget-<name>`
+# commands — the same file the JavaScript adapters read at runtime.
+CATALOG = json.loads((ROOT / "integrations/commands.json").read_text(encoding="utf-8"))
+REFERENCES = {entry["reference"]: entry["skill"] for entry in CATALOG}
+FRONTMATTER = re.compile(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n?")
 DESIRED_HOOK = "python3 {path} --hook --harness codex --budget 12288"
 DESIRED_DEVIN_HOOK = "python3 {path} --hook --harness devin --budget 12288"
 LEGACY_HOOK = "python3 {path} --hook"
@@ -405,6 +408,52 @@ def shared_files(home: Path) -> dict[Path, bytes]:
     return files
 
 
+def skill_body(raw: str, home: Path) -> str:
+    """The instruction part of a canonical SKILL.md: frontmatter off, script
+    paths pointed at the installed shared skill."""
+    return _replace_root(FRONTMATTER.sub("", raw, count=1), shared_dir(home)).strip()
+
+
+def command_skill_files(home: Path) -> dict[Path, bytes]:
+    """One `dont-forget-<name>` skill per catalog entry, next to the shared
+    `dont-forget` skill: this is how a command reaches hosts that have no
+    command API of their own (Codex `$dont-forget-about`, Devin, and anything
+    else that reads `.agents/skills`)."""
+    files = {}
+    for entry in CATALOG:
+        raw = (ROOT / "skills" / entry["skill"] / "SKILL.md").read_text(encoding="utf-8")
+        front = FRONTMATTER.match(raw)
+        fields = front.group(1) if front else f"name: {entry['skill']}"
+        fields = re.sub(r"(?m)^name:.*$", f'name: {entry["command"]}', fields).strip()
+        text = f"---\n{fields}\n---\n\n{skill_body(raw, home)}\n"
+        files[shared_dir(home).parent / entry["command"] / "SKILL.md"] = text.encode("utf-8")
+    return files
+
+
+def opencode_command_text(entry: dict, home: Path) -> str:
+    raw = (ROOT / "skills" / entry["skill"] / "SKILL.md").read_text(encoding="utf-8")
+    return (f'---\ndescription: "{entry["description"]}"\n---\n\n'
+            f'The user invoked the dont-forget command `/{entry["command"]}`.\n\n'
+            f'{skill_body(raw, home)}\n\nUser request: $ARGUMENTS\n')
+
+
+def plan_owned_file(path: Path, data: bytes, receipt_files: set[str]
+                    ) -> tuple[list[dict], list[str]]:
+    """One generated file: nothing when the bytes are already there, a write
+    when absent or recorded as ours, a conflict when a foreign file is in the
+    way."""
+    current = state_of(path)
+    if current["kind"] == "file" and current["sha256"] == digest(data):
+        return [], []
+    if current["kind"] == "absent":
+        return [file_op(path, data)], []
+    if str(path) in receipt_files:
+        if current["kind"] == "file":
+            return [file_op(path, data, path.read_bytes())], []
+        return [], [f"{path} is not a regular file"]
+    return [], [f"{path} exists and is not a dont-forget file"]
+
+
 def plan_shared(home: Path, adopt: bool, receipt: dict | None) -> tuple[list[dict], list[str]]:
     target = shared_dir(home)
     files = shared_files(home)
@@ -442,6 +491,15 @@ def plan_shared(home: Path, adopt: bool, receipt: dict | None) -> tuple[list[dic
             conflicts.append(f"{link} is not a symlink")
         else:
             ops.append(link_op(link, source))
+    receipt_files = {item["path"] for item in (receipt or {}).get("files", [])}
+    for path, data in command_skill_files(home).items():
+        if (not path.exists() and str(path) not in receipt_files
+                and path.parent.exists() and any(path.parent.iterdir())):
+            conflicts.append(f"{path.parent} exists and is not a dont-forget command skill")
+            continue
+        file_ops, file_conflicts = plan_owned_file(path, data, receipt_files)
+        ops.extend(file_ops)
+        conflicts.extend(file_conflicts)
     return ops, conflicts
 
 
@@ -630,6 +688,8 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
             return ops, conflicts, [], None, str(target)
         files = [file_entry(shared_dir(home) / relative, data)
                  for relative, data in shared_files(home).items()]
+        files.extend(file_entry(path, data)
+                     for path, data in command_skill_files(home).items())
         files.append(symlink_entry(shared_dir(home) / "scripts", ROOT / "scripts"))
         files.append(symlink_entry(shared_dir(home) / "integrations", ROOT / "integrations"))
         after = {"host": "shared", "target": str(target), "source": str(ROOT),
@@ -658,6 +718,21 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
         if conflicts:
             return ops, conflicts, [], None, str(target)
         files = [file_entry(path, data.encode("utf-8"))]
+        # `/dont-forget-<name>` for the TUI: file commands are the only command
+        # surface OpenCode has on both plugin APIs; the skills themselves reach
+        # the model through .agents/skills.
+        opencode_receipt = receipt_entry(receipt, "opencode", str(target))
+        receipt_files = {item["path"] for item in (opencode_receipt or {}).get("files", [])}
+        for entry_cmd in CATALOG:
+            command_path = target / "commands" / f'{entry_cmd["command"]}.md'
+            command_data = opencode_command_text(entry_cmd, home).encode("utf-8")
+            command_ops, command_conflicts = plan_owned_file(
+                command_path, command_data, receipt_files)
+            ops.extend(command_ops)
+            conflicts.extend(command_conflicts)
+            files.append(file_entry(command_path, command_data))
+        if conflicts:
+            return ops, conflicts, [], None, str(target)
         after = {"host": "opencode", "target": str(target), "source": str(ROOT),
                  "files": files, "hooks": []}
         return ops, [], [], after, str(target)

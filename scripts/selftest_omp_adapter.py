@@ -138,6 +138,19 @@ let entries = [];
   const headless = ctxFor({ hasUI: false });
   await assert.rejects(command.handler("", headless), /requires a UI/);
 
+  // One slash command per catalog entry sends the skill body as a fresh turn.
+  const commands = ["dont-forget-about", "dont-forget-that", "dont-forget-session",
+    "dont-forget-audit", "dont-forget-setup", "dont-forget-health", "dont-forget-him-please"];
+  for (const name of commands) assert(agents.commands.get(name), `missing command ${name}`);
+  const sentBefore = agents.sent.length;
+  await agents.commands.get("dont-forget-about").handler("why did we switch", main);
+  assert.equal(agents.sent.length, sentBefore + 1);
+  const turn = agents.sent[agents.sent.length - 1];
+  assert.equal(turn.message.customType, "dont-forget.command");
+  assert.equal(turn.options.triggerTurn, true);
+  assert(turn.message.content.includes("Search the vault"), turn.message.content);
+  assert(turn.message.content.includes("User request: why did we switch"));
+
   // A session switch invalidates the old digest; the next context reloads it.
   await agents.emit("session_switch", {}, main);
   const [reloaded] = await agents.emit("context", { messages: [] }, main);

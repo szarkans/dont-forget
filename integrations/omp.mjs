@@ -11,6 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDigestReader, marker } from "./digest.mjs";
+import { CATALOG, commandPrompt } from "./commands.mjs";
 
 const ROLE = "dont-forget.session-role";
 const DIGEST = "dont-forget.digest";
@@ -225,6 +226,38 @@ export default function dontForget(pi) {
       ctx.ui.notify(result?.text || "dont-forget: digest is empty (successful local scan)", "info");
     },
   });
+
+  // One slash command per catalog entry: the command body is the skill itself,
+  // so the model reads the same instructions here as on every other host.
+  for (const entry of CATALOG) {
+    pi.registerCommand(entry.command, {
+      description: entry.description,
+      handler: async (args, ctx) => {
+        try {
+          const text = commandPrompt(entry, args);
+          // sendMessage with triggerTurn, not a plain user message: a command
+          // runs inside prompt processing, so a queued message would miss the
+          // turn that is already over in print mode. This starts one.
+          await pi.sendMessage(
+            {
+              customType: "dont-forget.command",
+              content: text,
+              display: true,
+              attribution: "user",
+            },
+            { triggerTurn: true },
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // Print mode and headless hosts have no notify surface; losing the
+          // original message to a TypeError on a missing UI would hide why the
+          // command failed.
+          if (ctx?.ui?.notify) ctx.ui.notify(`dont-forget ${entry.command}: ${message}`, "error");
+          else console.error(`dont-forget ${entry.command}: ${message}`);
+        }
+      },
+    });
+  }
 }
 
 export { DIGEST, ROLE, marker };

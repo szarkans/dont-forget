@@ -51,6 +51,22 @@ twice. Disable or remove the older extension first; the installer never edits it
 only by naming `shared` or `all`. Vault, config, index, vectors, journals and the checkout
 are never removed.
 
+## Commands
+
+The shared install also writes one `dont-forget-<name>` skill per entry in
+`integrations/commands.json`, next to the shared `dont-forget` skill. That is
+how a command reaches a host with no command API of its own — Codex invokes it
+as `$dont-forget-<name>`, Devin and other `.agents/skills` readers as
+`/dont-forget-<name>` or a mention. Claude keeps its plugin names
+(`/dont-forget:<name>`).
+
+Two hosts get a native command surface on top: the OMP extension registers each
+`dont-forget-<name>` slash command (its handler sends the skill body as a fresh
+turn), and the OpenCode install writes `commands/dont-forget-<name>.md` —
+file commands with a `$ARGUMENTS` tail, valid on both plugin APIs. The command
+body is always the canonical `skills/<name>/SKILL.md` text with script paths
+pointed at the installed shared skill.
+
 ## Read a session
 
 ```bash

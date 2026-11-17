@@ -1,0 +1,44 @@
+[
+  {
+    "command": "dont-forget-about",
+    "skill": "about",
+    "reference": "about",
+    "description": "Recall prior decisions and context from the vault"
+  },
+  {
+    "command": "dont-forget-that",
+    "skill": "that",
+    "reference": "this",
+    "description": "Save durable knowledge to the vault"
+  },
+  {
+    "command": "dont-forget-session",
+    "skill": "session",
+    "reference": "session",
+    "description": "Audit this session and record its note"
+  },
+  {
+    "command": "dont-forget-audit",
+    "skill": "audit",
+    "reference": "review",
+    "description": "Audit the vault for stale, duplicated or missing knowledge"
+  },
+  {
+    "command": "dont-forget-setup",
+    "skill": "setup",
+    "reference": "setup",
+    "description": "Point dont-forget at a notes vault"
+  },
+  {
+    "command": "dont-forget-health",
+    "skill": "health",
+    "reference": "checkup",
+    "description": "Commit the vault and report its health"
+  },
+  {
+    "command": "dont-forget-him-please",
+    "skill": "him-please",
+    "reference": "him-please",
+    "description": "Forgettable."
+  }
+]

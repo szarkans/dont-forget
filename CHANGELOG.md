@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.0 — 2026-11-17
+
+### Added
+- Per-command skills on every host: the shared install now writes one
+  `dont-forget-<name>` skill per entry in `integrations/commands.json`
+  (`about`, `that`, `session`, `audit`, `setup`, `health`, `him-please`),
+  next to the shared `dont-forget` skill. Codex invokes them as
+  `$dont-forget-<name>`; Devin and other `.agents/skills` readers as
+  `/dont-forget-<name>`. Claude keeps its plugin names.
+  - Why: outside Claude Code the whole plugin collapsed into a single
+    `/dont-forget` entry point, so every workflow — recall, capture, session
+    close — had to be routed through one vague invocation.
+- OpenCode slash commands: the install writes `commands/dont-forget-<name>.md`
+  file commands with a `$ARGUMENTS` tail, valid on both plugin APIs.
+- OMP slash commands: the extension registers each `dont-forget-<name>`
+  command and sends the skill body as a fresh turn, next to the existing
+  `/dont-forget-digest`.
+
 ## 0.18.0 — 2026-11-16
 
 ### Added

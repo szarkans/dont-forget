@@ -62,6 +62,16 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-install-") as directory:
         text = path.read_text()
         assert "${CLAUDE_PLUGIN_ROOT}" not in text, path
 
+    # One command skill per catalog entry, next to the shared skill.
+    catalog = json.loads((ROOT / "integrations/commands.json").read_text())
+    for entry in catalog:
+        skill = home / ".agents/skills" / entry["command"] / "SKILL.md"
+        text = skill.read_text()
+        assert f'name: {entry["command"]}' in text.split("---")[1], skill
+        assert "${CLAUDE_PLUGIN_ROOT}" not in text, skill
+    assert "disable-model-invocation" in \
+        (home / ".agents/skills/dont-forget-him-please/SKILL.md").read_text()
+
     # A repeat is a real no-op: no new backup, no byte changes.
     before = hooks.read_bytes()
     second = load(run(home, "--host", "codex"))
@@ -147,11 +157,39 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-install-") as directory:
     assert set(result["skipped"]) == {"codex", "opencode", "omp", "devin"}, result
     assert (all_home / ".dont-forget/hosts.json").is_file()
 
+    # OpenCode also gets a file command per catalog entry.
+    oc_home = home / "oc"
+    oc = load(run(oc_home, "--host", "opencode", "--opencode-api", "2"))
+    assert oc["backup"], oc
+    command_file = oc_home / ".config/opencode/commands/dont-forget-about.md"
+    text = command_file.read_text()
+    assert "User request: $ARGUMENTS" in text and "Search the vault" in text, text
+    removed_oc = load(run(oc_home, "--host", "opencode", "--uninstall"))
+    assert removed_oc["backup"], removed_oc
+    assert not command_file.exists()
+    assert not (oc_home / ".config/opencode/plugins/dont-forget.js").exists()
+
+    # A foreign file or directory under a command name is a conflict, never a
+    # silent overwrite.
+    foreign_oc = home / "oc-foreign"
+    foreign_commands = foreign_oc / ".config/opencode/commands"
+    foreign_commands.mkdir(parents=True)
+    (foreign_commands / "dont-forget-about.md").write_text("mine")
+    conflict = run(foreign_oc, "--host", "opencode", "--opencode-api", "2", expect=1)
+    assert "not a dont-forget file" in conflict.stderr, conflict.stderr
+    assert (foreign_commands / "dont-forget-about.md").read_text() == "mine"
+    foreign_skill = home / "foreign-skill"
+    (foreign_skill / ".agents/skills/dont-forget-about").mkdir(parents=True)
+    (foreign_skill / ".agents/skills/dont-forget-about/notes.md").write_text("foreign")
+    conflict = run(foreign_skill, "--host", "shared", expect=1)
+    assert "not a dont-forget command skill" in conflict.stderr, conflict.stderr
+
     # all-uninstall reads the receipt, not PATH, and removes the shared entry too.
     removed_all = load(run(all_home, "--host", "all", "--uninstall", path="/nonexistent"))
     assert removed_all["backup"], removed_all
     shared_after = all_home / ".agents/skills/dont-forget"
     assert not (shared_after / "SKILL.md").exists() and not (shared_after / "scripts").exists()
+    assert not (all_home / ".agents/skills/dont-forget-about/SKILL.md").exists()
     assert json.loads((all_home / ".dont-forget/hosts.json").read_text())["installations"] == []
 
     # An alternate home cannot borrow the caller's state or agent directory.
