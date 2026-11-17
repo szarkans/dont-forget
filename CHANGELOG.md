@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.18.0 — 2026-11-16
+
+### Added
+- Universal transcript front: one `transcript.py` reads sessions from Claude Code, Codex,
+  OpenCode, OMP and Devin, freezes them into a snapshot, and hands readers
+  `--snapshot`/`--piece` so they audit the frozen file, never the live store. Install
+  adapters wire the session-start digest into all five hosts.
+  - Why: auditing from the model's own context defeated the point, and every harness
+    stored sessions differently, so the skill only worked in Claude Code.
+- Devin session support: reads `sessions.db` and ATIF exports, resolves `devin://<id>`
+  URIs, and maps cwd to session id through a hook-written `session-map.json`, since
+  Devin exposes no session env var.
+- Readers can open images: attachments become `<image: /path>` markers — existing files
+  stay as paths, inline payloads are dumped by content hash under
+  `audit-transcripts/images/`. Image-only messages no longer vanish from the audit.
+  - Why: a screenshot of the reported bug is often the only evidence; readers saw the
+    reply without the question.
+- `scripts/threads-page.py` renders the whole open-thread backlog as one self-contained
+  HTML page: per-project tables, a ToC, a live filter, full text behind a clamp, and the
+  closed-threads log collapsed underneath.
+  - Why: the digest shows only the freshest few per project; everything older aged out
+    invisibly.
+- `project_aliases` in `config.json` merges a renamed repository back into one project
+  (`{"new-name": ["old-name"]}`); matching and the threads page go through it.
+  - Why: a rename minted a second project and split the backlog in two.
+- Every audit candidate is journaled to `audit-candidates.jsonl` — accepted and rejected
+  alike — with its destination and the audit session id.
+  - Why: a wrongly judged `nowhere` used to die silently; logging is separate from
+    writing, so a rejected proposal still leaves data.
+- `budget_limited` and `budget_next_step` in search coverage: when the byte budget cuts
+  more than twice what it returns, the answer reports the slice and what to try next (#30).
+  - Why: a broad question could return 6 of 418 matched chunks while `weak_match` stayed
+    false, so the model answered confidently from 1.5% of the material.
+
+### Fixed
+- OMP transcripts that open with `type:"title"` records before the session header are
+  now detected and read correctly.
+- Transcript splitting no longer drops or isolates compaction markers; a piece that
+  would hold only markers merges into the previous piece.
+
 ## 0.17.0 — 2026-10-27
 
 ### Added
