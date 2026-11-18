@@ -134,6 +134,20 @@ plugin/skill loader, the startup marker observed in that host's own request path
 model answer that uses it. Linux is the required target; existing WSL/macOS compatibility is
 kept but not separately promised.
 
+Smoke-testing a `dont-forget-<name>` command differs per host:
+
+- OMP (18.22.0): only the TUI runs extension commands end to end — drive it through a
+  PTY. `omp -p "/cmd"` dispatches to the handler, but `sendMessage` with `triggerTurn`
+  never completes a turn and no session is written; `echo "/cmd" | omp` skips command
+  dispatch entirely and the model gets raw text.
+- Codex: `codex exec --skip-git-repo-check '$dont-forget-<name>'` resolves the generated
+  skill in a headless turn.
+- OpenCode: slash commands only exist in the TUI (register → `$ARGUMENTS` expansion →
+  turn); `opencode run` never expands them. The generated `~/.agents/skills` copy is
+  reachable in `run` as a skill.
+- Devin and other `.agents/skills` readers: `/dont-forget-<name>` or `$dont-forget-<name>`
+  per the host's own skill syntax.
+
 Integration references checked 2026-11-03:
 [Claude hooks](https://code.claude.com/docs/en/hooks.md),
 [Codex hooks](https://learn.chatgpt.com/docs/hooks.md),
