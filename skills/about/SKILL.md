@@ -4,6 +4,8 @@ description: "Use mid-task whenever past work might cover the current step — b
 model: inherit
 ---
 
+`<skill-root>` is the directory containing this `SKILL.md`; its `scripts/` entry is the script tree referenced below. If that entry is absent (some plugin installers drop symlinks), the script tree is `../../scripts` from this file, at the plugin root.
+
 # dont-forget:about — recall
 
 Search the vault for prior context and synthesize one honest answer from
@@ -18,7 +20,7 @@ from the cards, and its `## Cards` list is the recall. A page marked `legacy: tr
 no cards behind it — treat it as a hint, not an answer. Search the cards for anything
 else, and for the detail behind a godnote's claim.
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
+Run `python3 "<skill-root>/scripts/search.py" "<query>" --raw "<the user's message that triggered this recall, verbatim>"`. Run one search
 call, never split the question into several searches: that distorts ranking and coverage.
 
 Default search ranks the user's own notes first and ends with at most two leads
@@ -138,7 +140,7 @@ End the answer with a separate concise report drawn from `coverage`: matching
 chunks (`matched_chunks`), how many fragments came back (`returned`), how many were
 cut by the byte budget (`dropped_by_budget`), and any `skipped_hubs`.
 `semantic` says `ready`, `partial: X of Y chunks`, or `off: reason`; complete a
-partial first pass with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/index.py" --embed`.
+partial first pass with `python3 "<skill-root>/scripts/index.py" --embed`.
 `semantic_pool_examined` and `returned_by_meaning` show the semantic lane's reach.
 If `semantic_old_vector_files` appears, those older caches for this index are retained on disk.
 By default,
@@ -190,7 +192,7 @@ not a reason to silently add notes beyond the results.
 Some searches prove something about the memory rather than about the topic, and that
 proof is worth a line in the journal. Log it at the moment it appears — never
 reconstruct one later because someone asked — by piping one JSON object to
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"` with `verdict`, a non-empty
+`python3 "<skill-root>/scripts/feedback-log.py"` with `verdict`, a non-empty
 `query`, `notes` (the returned note paths), and `note`, one line on what happened.
 
 Four verdicts, and nothing else: `saved-work` when a result demonstrably avoided

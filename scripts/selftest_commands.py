@@ -35,6 +35,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-commands-") as directory:
         frontmatter = text.split("---")[1]
         assert f'name: {path.parent.name}' in frontmatter, path
         assert "${CLAUDE_PLUGIN_ROOT}" not in text, path
+        assert "<skill-root>" not in text, path
     about = next(entry for entry in catalog if entry["skill"] == "about")
     assert str(shared / "scripts") in \
         files[shared.parent / about["command"] / "SKILL.md"].decode()
@@ -47,6 +48,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-commands-") as directory:
         assert command.startswith('---\ndescription:'), entry
         assert "User request: $ARGUMENTS" in command, entry
         assert "${CLAUDE_PLUGIN_ROOT}" not in command, entry
+        assert "<skill-root>" not in command, entry
     assert "Search the vault" in module.opencode_command_text(catalog[0], home)
 
 print("ok")

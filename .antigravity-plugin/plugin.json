@@ -1,0 +1,21 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "dont-forget",
+  "displayName": "don't forget",
+  "version": "0.20.0",
+  "description": "I'm with you in the dark. Persistent Zettelkasten memory over a plain Markdown vault: automatic recall on session start, full-text plus link-graph search, atomic fact capture, session continuity.",
+  "author": {
+    "name": "szarkans",
+    "url": "https://github.com/szarkans"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/szarkans/dont-forget",
+  "repository": "https://github.com/szarkans/dont-forget",
+  "keywords": [
+    "memory",
+    "obsidian",
+    "zettelkasten",
+    "recall",
+    "session-notes"
+  ]
+}

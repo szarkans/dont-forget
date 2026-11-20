@@ -387,7 +387,8 @@ def _stdin_session_id() -> str | None:
     except (OSError, ValueError):
         return None
     if isinstance(payload, dict):
-        session_id = payload.get("session_id") or payload.get("sessionId")
+        session_id = payload.get("session_id") or payload.get("sessionId") \
+            or payload.get("conversationId")
         if isinstance(session_id, str) and session_id:
             return session_id
     return None
@@ -416,7 +417,7 @@ def main() -> None:
     parser.add_argument("--text", action="store_true",
                         help="print the digest as plain context text for host adapters")
     parser.add_argument("--harness",
-                        choices=("claude", "codex", "opencode", "omp", "devin"),
+                        choices=("claude", "codex", "opencode", "omp", "devin", "agy"),
                         help="the host this digest is for; with --session names the audit id")
     parser.add_argument("--session",
                         help="the session id inside that host's store")
@@ -444,9 +445,16 @@ def main() -> None:
     budget = args.budget - HOOK_OVERHEAD if args.hook else args.budget
     payload = scan(args.db, tail_limit, gotcha_limit, budget, project, index_error,
                    canonical_session)
+    context = hook_payload(payload, args.harness or "claude") \
+        ["hookSpecificOutput"]["additionalContext"]
     if args.text:
-        print(hook_payload(payload, args.harness or "claude")
-              ["hookSpecificOutput"]["additionalContext"])
+        print(context)
+        return
+    if args.hook and args.harness == "agy":
+        # Antigravity's hook contract: transient context travels as injectSteps.
+        inject = [{"ephemeralMessage": context}] if context else []
+        print(json.dumps({"injectSteps": inject},
+                         ensure_ascii=False, separators=(",", ":")))
         return
     output = hook_payload(payload, args.harness or "claude") if args.hook else payload
     print(json.dumps(output, ensure_ascii=False, separators=(",", ":")))

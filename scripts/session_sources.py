@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import ast
 import base64
+import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -50,6 +52,8 @@ def _native_identity(harness: str) -> str | None:
         return thread or session or None
     if harness == "devin":
         return _devin_identity()
+    if harness == "agy":
+        return _agy_identity()
     return None
 
 
@@ -71,6 +75,10 @@ def _present_families() -> list[str]:
     if _env("AI_AGENT").startswith("devin") or "CHISEL_SESSION_DB" in os.environ \
             or "DEVIN_TRACEPARENT" in os.environ:
         present.append("devin")
+    # Antigravity advertises no variable either: the hook's map entry for this
+    # exact directory is the only signal, and it is only ever written by the hook.
+    if session_map_lookup("agy", str(Path.cwd().resolve())):
+        present.append("agy")
     return present
 
 
@@ -81,7 +89,7 @@ def active_session_identity(harness: str = "auto") -> tuple[str, str | None]:
     family: two families mean a foreign id was inherited and no answer is safe, while a
     single family with an empty id means the host is known but has no usable identity.
     """
-    if harness in ("claude", "codex", "opencode", "omp", "devin"):
+    if harness in ("claude", "codex", "opencode", "omp", "devin", "agy"):
         return harness, _native_identity(harness)
     present = _present_families()
     if len(present) != 1:
@@ -151,7 +159,7 @@ def validate_session_id(value: object) -> str:
         raise ValueError(problem)
     if ":" in value:
         harness, session_id = value.split(":", 1)
-        if harness not in ("omp", "codex", "opencode", "devin") \
+        if harness not in ("omp", "codex", "opencode", "devin", "agy") \
                 or not session_id or ":" in session_id:
             raise ValueError(problem)
     return value
@@ -1050,6 +1058,11 @@ def devin_export(data: dict, source: str) -> dict:
             parts = [message] if message.strip() else []
             parts.extend(_devin_tool_calls(step.get("tool_calls")))
             add_turn(session["turns"], "assistant", "\n".join(parts))
+        elif source_kind == "system" and message.startswith(
+                "You are continuing work from a previous conversation thread"):
+            # The injected compaction summary is a boundary the split can cut at;
+            # the pre-compaction steps themselves are not in the export.
+            add_turn(session["turns"], "compaction", message)
         # system prompts, observations and compaction machinery stay in the file.
     return session
 
@@ -1092,39 +1105,83 @@ def devin_session(source, *, db_path: Path | None = None) -> dict:
                                     str(exported))
             raise ValueError(f"Devin session not found: {text}")
         nodes = connection.execute(
-            "SELECT node_id, parent_node_id, chat_message FROM message_nodes "
+            "SELECT node_id, parent_node_id, chat_message, metadata FROM message_nodes "
             "WHERE session_id=?", (text,)).fetchall()
     by_id: dict[int, tuple] = {}
-    for node_id, parent_id, chat in nodes:
-        by_id[node_id] = (parent_id, chat)
+    for node_id, parent_id, chat, metadata in nodes:
+        try:
+            meta = json.loads(metadata) if metadata else {}
+        except json.JSONDecodeError:
+            meta = {}
+        by_id[node_id] = (parent_id, chat, meta if isinstance(meta, dict) else {})
+    # Compaction does not shorten the store — it re-roots the chain: the new stretch
+    # gets a fresh parentless root, so following main_chain_id back reaches only the
+    # part written after the last compaction. Each summary node carries the tail of
+    # the stretch it replaced in metadata.summarized_from; those links chain the
+    # whole session back together, one compacted segment at a time.
     leaf = row["main_chain_id"]
     if leaf not in by_id:
         leaf = max(by_id) if by_id else None
-    chain, visited = [], set()
-    while leaf is not None:
-        if leaf in visited:
-            raise ValueError(f"cycle in Devin conversation at node {leaf}: {text}")
-        if leaf not in by_id:
-            raise ValueError(f"missing Devin parent node {leaf}: {text}")
-        visited.add(leaf)
-        parent, chat = by_id[leaf]
-        chain.append(chat)
-        leaf = parent
+    segments, visited, seen_heads = [], set(), set()
+    while leaf is not None and leaf in by_id and leaf not in seen_heads:
+        seen_heads.add(leaf)
+        segment, local = [], set()
+        while leaf is not None:
+            if leaf in local:
+                raise ValueError(f"cycle in Devin conversation at node {leaf}: {text}")
+            if leaf not in by_id:
+                raise ValueError(f"missing Devin parent node {leaf}: {text}")
+            if leaf in visited:
+                # Shared prefix: a later render re-anchored its replays onto nodes
+                # an earlier segment already walked — the stretch ends here.
+                break
+            local.add(leaf)
+            parent, _chat, _meta = by_id[leaf]
+            segment.append(leaf)
+            leaf = parent
+        visited.update(local)
+        segment.reverse()
+        segments.append(segment)
+        leaf = next((by_id[nid][2].get("summarized_from") for nid in segment
+                     if by_id[nid][2].get("summarized_from") is not None), None)
+    segments.reverse()
     session = {"harness": "devin", "session_id": text,
                "cwd": row["working_directory"] or "", "entrypoint": "cli",
                "turns": [], "path": f"devin://{text}", "chain_head": row["main_chain_id"]}
-    for chat in reversed(chain):
-        try:
-            message = json.loads(chat) if isinstance(chat, str) else chat
-        except json.JSONDecodeError:
-            print(f"dont-forget: malformed Devin message row skipped: {text}",
-                  file=sys.stderr)
-            continue
-        if not isinstance(message, dict):
-            continue
-        role = message.get("role")
-        if role in ("user", "assistant"):
-            add_turn(session["turns"], role, _devin_message_text(message))
+    emitted, summarized = set(), set()
+    for segment in segments:
+        for node_id in segment:
+            if node_id in emitted:
+                continue
+            emitted.add(node_id)
+            _parent, chat, meta = by_id[node_id]
+            try:
+                message = json.loads(chat) if isinstance(chat, str) else chat
+            except json.JSONDecodeError:
+                print(f"dont-forget: malformed Devin message row skipped: {text}",
+                      file=sys.stderr)
+                continue
+            if not isinstance(message, dict):
+                continue
+            summarized_from = meta.get("summarized_from")
+            if summarized_from is not None:
+                # The summary is the session's own compressed memory; identical
+                # copies of it reappear in later renders, deduped by their tail.
+                if summarized_from in summarized:
+                    continue
+                summarized.add(summarized_from)
+                add_turn(session["turns"], "compaction",
+                         _devin_message_text(message) or "--- context compacted ---")
+                continue
+            # Replays re-anchor earlier context after a compaction: the first copy
+            # of a node stands in for the original, later renders are duplicates.
+            priors = (meta.get("extensions") or {}).get("compact/prior_node_ids") or []
+            if any(prior in emitted for prior in priors):
+                continue
+            emitted.update(priors)
+            role = message.get("role")
+            if role in ("user", "assistant"):
+                add_turn(session["turns"], role, _devin_message_text(message))
         # system rows are prompt machinery; tool rows are results — neither is said text.
     return session
 
@@ -1198,6 +1255,184 @@ def omp_transcript_path(session_id: str) -> Path:
             break
     raise ValueError(f"OMP session {session_id} was not found under {root} "
                      f"({scanned} sessions scanned)")
+
+
+# ---------------------------------------------------------------------------
+# Antigravity (agy)
+# ---------------------------------------------------------------------------
+
+AGY_DATA_DIRS = ("antigravity-cli", "antigravity", "antigravity-ide")
+
+
+def agy_data_roots() -> list[Path]:
+    """Each Antigravity surface keeps its own store; the CLI is listed first.
+
+    App, CLI and the standalone IDE share `~/.gemini/config` for skills and hooks
+    but write conversations under their own `<dir>/brain/<conversation-id>/`.
+    """
+    base = Path(_env("AGY_DATA_HOME") or Path.home() / ".gemini").expanduser()
+    return [base / name for name in AGY_DATA_DIRS]
+
+
+def agy_transcript_path(conversation_id: str,
+                        roots: list[Path] | None = None) -> Path:
+    """The full conversation log; `transcript.jsonl` is the same log with tool
+    arguments escaped, so it is the fallback, never the first pick."""
+    for root in roots or agy_data_roots():
+        logs = root / "brain" / conversation_id / ".system_generated" / "logs"
+        for name in ("transcript_full.jsonl", "transcript.jsonl"):
+            path = logs / name
+            if path.is_file():
+                return path
+    raise ValueError(f"Antigravity conversation {conversation_id} has no transcript")
+
+
+def _agy_workspace(conversation_id: str,
+                   roots: list[Path] | None = None) -> str:
+    """The first workspace URI a conversation ran in, from its surface's summary db."""
+    for root in roots or agy_data_roots():
+        db = root / "conversation_summaries.db"
+        if not db.is_file():
+            continue
+        try:
+            with read_db(db) as connection:
+                tables = {row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                if "conversation_summaries" not in tables:
+                    continue
+                row = connection.execute(
+                    "SELECT workspace_uris FROM conversation_summaries "
+                    "WHERE conversation_id=?", (conversation_id,)).fetchone()
+        except (OSError, sqlite3.Error):
+            continue
+        if row is None:
+            continue
+        try:
+            uris = json.loads(row["workspace_uris"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        for uri in uris if isinstance(uris, list) else []:
+            if isinstance(uri, str) and uri.startswith("file://"):
+                return uri[len("file://"):]
+    return ""
+
+
+def _agy_user_text(content) -> str:
+    """The request inside the `<USER_REQUEST>` envelope; metadata tails are dropped."""
+    if not isinstance(content, str):
+        return ""
+    match = re.search(r"<USER_REQUEST>\s*(.*?)\s*</USER_REQUEST>", content, re.DOTALL)
+    return match.group(1) if match else content
+
+
+def _agy_tool_lines(entry: dict) -> list[str]:
+    lines = []
+    for call in entry.get("tool_calls") or []:
+        if isinstance(call, dict):
+            lines.append(tool_line(call.get("name") or "tool", call.get("args")))
+    return lines
+
+
+def agy_session(source, *, roots: list[Path] | None = None) -> dict:
+    """An Antigravity conversation: `agy://<id>`, a bare conversation id, or a
+    transcript file. Steps are stored as one JSON per line with the model's
+    `thinking` kept private — GENERIC rows are tool payloads and are skipped."""
+    text = str(source)
+    if text.startswith("agy://"):
+        text = text[len("agy://"):]
+    candidate = Path(text)
+    if candidate.is_file():
+        path = candidate
+        try:
+            under_logs = path.parent.name == "logs" \
+                and path.parents[1].name == ".system_generated"
+            conversation_id = path.parents[2].name if under_logs else path.stem
+        except IndexError:
+            conversation_id = path.stem
+    else:
+        path = agy_transcript_path(text, roots=roots)
+        conversation_id = text
+    turns: list[dict] = []
+    for entry in json_lines(path):
+        kind = entry.get("type")
+        if kind == "USER_INPUT":
+            add_turn(turns, "user", _agy_user_text(entry.get("content")))
+        elif kind == "PLANNER_RESPONSE":
+            parts = []
+            content = entry.get("content")
+            if isinstance(content, str) and content.strip():
+                parts.append(content.strip())
+            parts.extend(_agy_tool_lines(entry))
+            add_turn(turns, "assistant", "\n".join(parts))
+        elif kind == "SYSTEM_MESSAGE":
+            add_turn(turns, "system", entry.get("content"))
+        elif isinstance(kind, str) and "COMPACT" in kind:
+            add_turn(turns, "compaction", "--- context compacted ---")
+        # GENERIC steps are tool results: payloads stay in the file.
+    if not turns:
+        raise ValueError(f"no conversation found in {path}")
+    surface = next((root.name for root in roots or agy_data_roots()
+                    if str(path).startswith(str(root))), "")
+    return {"harness": "agy", "session_id": conversation_id,
+            "cwd": _agy_workspace(conversation_id, roots=roots),
+            "entrypoint": "cli" if surface == "antigravity-cli" else "ide",
+            "turns": turns, "path": str(path)}
+
+
+def agy_sessions(cutoff: float, before: float,
+                 roots: list[Path] | None = None) -> list[dict]:
+    """Interactive Antigravity conversations active inside the window, newest first."""
+    found = []
+    for root in roots or agy_data_roots():
+        db = root / "conversation_summaries.db"
+        if not db.is_file():
+            continue
+        with read_db(db) as connection:
+            tables = {row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            if "conversation_summaries" not in tables:
+                raise ValueError(f"unsupported Antigravity summary schema: {db}")
+            rows = connection.execute(
+                "SELECT conversation_id, workspace_uris, last_modified_time "
+                "FROM conversation_summaries").fetchall()
+        for row in rows:
+            try:
+                mtime = datetime.datetime.fromisoformat(
+                    row["last_modified_time"]).timestamp()
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if not cutoff <= mtime <= before:
+                continue
+            try:
+                (root / "brain" / row["conversation_id"] / ".system_generated"
+                 / "logs" / "transcript_full.jsonl").stat()
+            except OSError:
+                continue
+            found.append({"session_id": row["conversation_id"],
+                          "cwd": _agy_workspace(row["conversation_id"], roots=[root]),
+                          "mtime": mtime,
+                          "path": f"agy://{row['conversation_id']}"})
+    found.sort(key=lambda item: item["mtime"], reverse=True)
+    return found
+
+
+def _agy_identity() -> str | None:
+    """The running Antigravity conversation, from the hook's map or the newest
+    summary row for this directory — the CLI sets no session variable of its own."""
+    cwd = str(Path.cwd().resolve())
+    mapped = session_map_lookup("agy", cwd)
+    if mapped:
+        return mapped
+    try:
+        rows = agy_sessions(time.time() - 90 * 86400, time.time())
+    except (OSError, sqlite3.Error, ValueError):
+        return None
+    for row in rows:  # newest first
+        if row["cwd"] == cwd:
+            print("dont-forget: Antigravity session id came from the newest row for this"
+                  " directory, not the hook's session map", file=sys.stderr)
+            return row["session_id"]
+    return None
 
 
 # ---------------------------------------------------------------------------

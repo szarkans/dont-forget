@@ -1,0 +1,11 @@
+{
+  "dont-forget": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "[ \"${DONT_FORGET_HOOKS:-1}\" = 0 ] || python3 ./scripts/hot-scan.py --hook --harness agy --budget 12288",
+        "timeout": 10
+      }
+    ]
+  }
+}

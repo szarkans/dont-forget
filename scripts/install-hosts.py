@@ -37,6 +37,7 @@ REFERENCES = {entry["reference"]: entry["skill"] for entry in CATALOG}
 FRONTMATTER = re.compile(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n?")
 DESIRED_HOOK = "python3 {path} --hook --harness codex --budget 12288"
 DESIRED_DEVIN_HOOK = "python3 {path} --hook --harness devin --budget 12288"
+DESIRED_AGY_HOOK = "python3 {path} --hook --harness agy --budget 12288"
 LEGACY_HOOK = "python3 {path} --hook"
 BACKUP_ID = re.compile(r"^[0-9]{8}T[0-9]{12}$")
 HOOK_EVENTS = {"SessionStart": "startup|resume|clear|compact|fork",
@@ -393,9 +394,10 @@ def _replace_root(text: str, script_root: Path) -> str:
     # into them is the installed skill dir — a stable location whose `scripts` symlink
     # follows the checkout wherever it moves — so a checkout relocation rewrites only
     # that one symlink, not every reference and hook on the machine.
-    text = re.sub(r'"\$\{CLAUDE_PLUGIN_ROOT\}/(scripts/[^"]+)"',
+    text = re.sub(r'"(?:\$\{CLAUDE_PLUGIN_ROOT\}|<skill-root>)/(scripts/[^"]+)"',
                   lambda match: shlex.quote(str(script_root / match.group(1))), text)
-    return text.replace("${CLAUDE_PLUGIN_ROOT}", str(script_root))
+    return text.replace("${CLAUDE_PLUGIN_ROOT}", str(script_root)).replace(
+        "<skill-root>", str(script_root))
 
 
 def shared_files(home: Path) -> dict[Path, bytes]:
@@ -642,6 +644,68 @@ def plan_devin(config_home: Path, home: Path) -> tuple[list[dict], list[str], li
     return [file_op(path, data, path.read_bytes() if path.is_file() else None)], [], records
 
 
+def agy_owned_commands(home: Path) -> set[str]:
+    return {DESIRED_AGY_HOOK.format(path=script) for script in _hot_scan_paths(home)} | \
+           {LEGACY_HOOK.format(path=script) for script in _hot_scan_paths(home)}
+
+
+def plan_agy(agy_home: Path, home: Path) -> tuple[list[dict], list[str], list[dict], list[tuple]]:
+    """Developer install for Antigravity: the shared and per-command skills land as
+    symlinks under ~/.gemini/config/skills, and one named hook group — the shape
+    Antigravity's hook file uses — goes into ~/.gemini/config/hooks.json next to
+    whatever groups the user already has (gemini-cli's own "hooks" key included).
+    The public path is `agy plugin install`; this host exists for checkouts and
+    for machines where the plugin manager is not the flow.
+    """
+    ops, conflicts, links = [], [], []
+    skills_dir = agy_home / "skills"
+    wanted = {"dont-forget": shared_dir(home)}
+    for entry in CATALOG:
+        wanted[entry["command"]] = shared_dir(home).parent / entry["command"]
+    for name, source in wanted.items():
+        link = skills_dir / name
+        if link.is_symlink():
+            if link.resolve() == source.resolve():
+                continue
+            conflicts.append(f"{link} points at another location: {link.resolve()}")
+        elif link.exists():
+            conflicts.append(f"{link} exists and is not a dont-forget symlink")
+        else:
+            ops.append(link_op(link, source))
+            links.append((link, source))
+    path = agy_home / "hooks.json"
+    if path.is_symlink():
+        return ops, conflicts + [f"{path} is a symlink; refusing to replace it"], [], links
+    try:
+        config = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError) as error:
+        return ops, conflicts + [f"cannot read {path}: {error}"], [], links
+    if not isinstance(config, dict):
+        return ops, conflicts + [f"{path} is not a JSON object"], [], links
+    script = shlex.quote(str(shared_dir(home) / "scripts/hot-scan.py"))
+    command = DESIRED_AGY_HOOK.format(path=script)
+    wanted_group = {"SessionStart": [{"type": "command", "command": command, "timeout": 10}]}
+    group = config.get("dont-forget")
+    owned = agy_owned_commands(home)
+    if group is not None:
+        handlers = group.get("SessionStart") if isinstance(group, dict) else None
+        commands = {handler.get("command") for handler in handlers or []
+                    if isinstance(handler, dict)}
+        if not commands <= owned:
+            return ops, conflicts + [
+                f"{path} has a dont-forget hook group this installer did not write"], [], links
+    before = json.loads(json.dumps(config))
+    if canonical(group) != canonical(wanted_group):
+        config["dont-forget"] = wanted_group
+    records = [{"path": str(path), "event": "SessionStart", "group": "dont-forget",
+                "handler": command}]
+    if canonical(config) != canonical(before):
+        ops.append(file_op(path, (json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+                           .encode("utf-8"),
+                           path.read_bytes() if path.is_file() else None))
+    return ops, conflicts, records, links
+
+
 def opencode_wrapper(api: int, home: Path) -> str:
     uri = (shared_dir(home) / "integrations/opencode.mjs").as_uri()
     exported = "adapter" if api == 2 else "legacy"
@@ -778,6 +842,16 @@ def plan_host(host: str, home: Path, receipt: dict, api: int | None,
                  "files": [], "hooks": hook_ops}
         return ops, [], hook_ops, after, str(target)
 
+    if host == "agy":
+        target = roots["agy"]
+        ops, conflicts, hook_ops, links = plan_agy(target, home)
+        if conflicts:
+            return ops, conflicts, [], None, str(target)
+        files = [symlink_entry(link, source) for link, source in links]
+        after = {"host": "agy", "target": str(target), "source": str(ROOT),
+                 "files": files, "hooks": hook_ops}
+        return ops, [], hook_ops, after, str(target)
+
     raise ValueError(f"unknown host: {host}")
 
 
@@ -829,6 +903,28 @@ def plan_uninstall(hosts: list[str], receipt: dict) -> tuple[list[dict], list[st
             if canonical(config) != canonical(before):
                 ops.append(file_op(path, (json.dumps(config, ensure_ascii=False, indent=2)
                                           + "\n").encode("utf-8"), path.read_bytes()))
+        if entry.get("host") == "agy" and entry.get("hooks"):
+            path = Path(entry["hooks"][0]["path"])
+            if path.exists() and not path.is_symlink():
+                try:
+                    config = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as error:
+                    conflicts.append(f"cannot read {path}: {error}")
+                    config = None
+                if isinstance(config, dict):
+                    group = config.get("dont-forget")
+                    handlers = group.get("SessionStart") if isinstance(group, dict) else None
+                    owned = {(item.get("handler"),) for item in entry.get("hooks", [])}
+                    if group is not None and all(
+                            isinstance(handler, dict) and (handler.get("command"),) in owned
+                            for handler in handlers or []):
+                        before = path.read_bytes()
+                        config.pop("dont-forget", None)
+                        ops.append(file_op(path, (json.dumps(config, ensure_ascii=False,
+                                                             indent=2) + "\n")
+                                           .encode("utf-8"), before))
+                    elif group is not None:
+                        conflicts.append(f"{path} has a foreign dont-forget hook group")
         ops.append(receipt_op(state_of_path(), entry["host"], entry["target"], None))
     return ops, conflicts, []
 
@@ -843,7 +939,8 @@ def state_of_path() -> Path:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=("shared", "codex", "opencode", "omp", "devin", "all"))
+    parser.add_argument("--host", choices=("shared", "codex", "opencode", "omp", "devin",
+                                           "agy", "all"))
     parser.add_argument("--home", type=Path, default=Path.home(),
                         help="override install destinations for isolated checks")
     parser.add_argument("--opencode-api", type=int, choices=(1, 2),
@@ -872,6 +969,7 @@ def _resolve_roots(args):
                     if os.environ.get("OPENCODE_CONFIG_DIR")
                     else (Path(xdg).expanduser().resolve() if xdg else home / ".config") / "opencode")
         devin = Path(xdg).expanduser().resolve() / "devin" if xdg else home / ".config/devin"
+        agy = home / ".gemini/config"
         agent = args.omp_agent_dir.expanduser().resolve() if args.omp_agent_dir else omp_agent_dir()
     else:
         if explicit_state:
@@ -883,10 +981,11 @@ def _resolve_roots(args):
         codex = home / ".codex"
         opencode = home / ".config/opencode"
         devin = home / ".config/devin"
+        agy = home / ".gemini/config"
         agent = args.omp_agent_dir.expanduser().resolve() if args.omp_agent_dir else home / ".omp/agent"
         if not agent.is_relative_to(home):
             raise ValueError(f"--omp-agent-dir must be inside {home}: {agent}")
-    return home, native, state, codex, opencode, agent, devin
+    return home, native, state, codex, opencode, agent, devin, agy
 
 
 def _detect_opencode_major(args) -> int | None:
@@ -912,7 +1011,7 @@ def main() -> None:
     args = parse_args()
     global STATE
     try:
-        home, native, STATE, codex, opencode, agent, devin = _resolve_roots(args)
+        home, native, STATE, codex, opencode, agent, devin, agy = _resolve_roots(args)
         os.environ["_DF_OMP_AGENT_DIR"] = str(agent)
         os.environ["_DF_HOSTS_HOME"] = str(home) if not native else ""
         receipt = read_receipt(STATE)
@@ -983,6 +1082,10 @@ def main() -> None:
             selected.append("devin")
         else:
             skipped.append("devin")
+        if shutil.which("agy") or (home / ".gemini/antigravity-cli").is_dir():
+            selected.append("agy")
+        else:
+            skipped.append("agy")
     else:
         if args.host != "shared":
             selected.append(args.host)
@@ -994,7 +1097,8 @@ def main() -> None:
             if api is None:
                 raise SystemExit("dont-forget: --opencode-api 1|2 is required when OpenCode is not installed")
 
-    roots = {"codex": codex, "opencode": opencode, "omp": agent, "devin": devin}
+    roots = {"codex": codex, "opencode": opencode, "omp": agent, "devin": devin,
+             "agy": agy}
     ops: list[dict] = []
     conflicts: list[str] = []
     entries: list[dict] = []

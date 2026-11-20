@@ -4,13 +4,15 @@ description: "Point the plugin at a notes vault on first use, or move it to a di
 model: inherit
 ---
 
+`<skill-root>` is the directory containing this `SKILL.md`; its `scripts/` entry is the script tree referenced below. If that entry is absent (some plugin installers drop symlinks), the script tree is `../../scripts` from this file, at the plugin root.
+
 # dont-forget:setup — point the plugin at a vault
 
 This plugin remembers by reading and writing plain Markdown files in one folder. Setup
 is the single question of which folder that is. Everything else — the index, the logs —
 is disposable and rebuilds itself, so nothing here is a decision the user has to live with.
 
-Start with `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" --detect`. It reports what is
+Start with `python3 "<skill-root>/scripts/setup.py" --detect`. It reports what is
 configured now, what went wrong if anything, and every vault it found. Do not ask the
 user to type a path before running it: the whole point is that they usually do not have to.
 
@@ -44,15 +46,15 @@ Re-running setup is not a reason to change anything.
 
 ## Applying
 
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" --set <path>` writes the config and builds the first index in
+`python3 "<skill-root>/scripts/setup.py" --set <path>` writes the config and builds the first index in
 one step. It reports the note, chunk and link counts it indexed — pass those on, because
 they are the first evidence that the plugin can actually see the notes. Zero notes on a
 folder the user believed was full means the wrong folder was chosen; say so rather than
 reporting success.
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/setup.py" --install-semantic` to create
+Run `python3 "<skill-root>/scripts/setup.py" --install-semantic` to create
 the plugin venv with CPU PyTorch and Granite dependencies and download the pinned model. Then run
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/index.py" --embed` for the first full
+`python3 "<skill-root>/scripts/index.py" --embed` for the first full
 vector pass; it can take about an hour on this CPU. Search remains word-only if
 installation fails, and its `coverage.semantic` says why.
 

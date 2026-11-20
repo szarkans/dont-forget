@@ -1,0 +1,16 @@
+{
+  "name": "dont-forget",
+  "interface": {
+    "displayName": "don't forget"
+  },
+  "plugins": [
+    {
+      "name": "dont-forget",
+      "source": "./",
+      "description": "I'm with you in the dark. Long-term memory over a folder of Markdown notes: recall on session start, full-text plus link-graph search, atomic fact capture, session continuity.",
+      "version": "0.20.0",
+      "category": "productivity",
+      "keywords": ["memory", "obsidian", "zettelkasten", "recall", "second-brain", "session-notes", "knowledge-management"]
+    }
+  ]
+}

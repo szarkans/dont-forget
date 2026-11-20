@@ -4,6 +4,8 @@ description: "Persist durable knowledge when it would change how a future sessio
 model: inherit
 ---
 
+`<skill-root>` is the directory containing this `SKILL.md`; its `scripts/` entry is the script tree referenced below. If that entry is absent (some plugin installers drop symlinks), the script tree is `../../scripts` from this file, at the plugin root.
+
 # dont-forget:that — Persist Durable Knowledge
 
 - [ ] Treat persistence as a behavior change, not a transcript archive. Save only
@@ -104,7 +106,7 @@ model: inherit
 ## Say where it lands before it lands
 
 - [ ] Before any write, search the vault for the claim's key words and its synonyms
-  (`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/search.py" "<words>"`), read what comes back,
+  (`python3 "<skill-root>/scripts/search.py" "<words>"`), read what comes back,
   and tell the user in one or two lines where the new claim lands — one of four:
   **new** (nothing close), **continues [[X]]** (same cause, another case: a merge
   candidate), **contradicts [[Y]] (date)** (say which is newer and that the older may
@@ -172,6 +174,6 @@ model: inherit
   forbids — and the demand counter, which only sees bare names, never records it, so the
   hub it was reaching for can never be born. Put links in prose, never inside code blocks.
 - [ ] Write vault notes only by sending the complete filename and Markdown content
-  JSON to `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"`. On `exists-same`, report that the note
+  JSON to `python3 "<skill-root>/scripts/vault-write.py"`. On `exists-same`, report that the note
   was already present. On `conflict`, stop and tell the user; never replace or
   reconcile the content on your own.

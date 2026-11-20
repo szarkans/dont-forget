@@ -4,6 +4,8 @@ description: Read what the vault says, once in a while — names the vault keeps
 model: inherit
 ---
 
+`<skill-root>` is the directory containing this `SKILL.md`; its `scripts/` entry is the script tree referenced below. If that entry is absent (some plugin installers drop symlinks), the script tree is `../../scripts` from this file, at the plugin root.
+
 # dont-forget:audit — read the content, the user decides what it means
 
 `health` checks the machinery and runs on every session close. This reads the content and
@@ -18,7 +20,7 @@ semantic lane (`setup.py --install-semantic` and `index.py --embed`).
 
 ## Names the vault keeps asking for
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/audit.py"`. `link_demand` lists names that
+Run `python3 "<skill-root>/scripts/audit.py"`. `link_demand` lists names that
 notes point at and no note answers to, with every spelling of the same name grouped together.
 
 - Report it, and stop there. A high count says the topic recurs; it does not say what is
@@ -35,7 +37,7 @@ notes point at and no note answers to, with every spelling of the same name grou
 Vectors propose, readers judge, the user decides. Closeness by meaning is not sameness, so
 every candidate is read in full by a reader agent before anyone acts on it.
 
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/audit_semantic.py" candidates` finds four kinds of
+`python3 "<skill-root>/scripts/audit_semantic.py" candidates` finds four kinds of
 candidates — groups of cards no godnote links, close pairs across projects with no path
 between them, close pairs inside one project, and notes the vault itself calls replaced,
 outdated or corrected — and writes `batches/*.in.json` only for those no reader has judged

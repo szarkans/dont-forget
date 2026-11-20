@@ -24,7 +24,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from common import HOME_DIR
-from session_sources import (active_session_identity, claude_projects, codex_root, codex_session,
+from session_sources import (active_session_identity, agy_session, agy_sessions,
+                             claude_projects, codex_root, codex_session,
                              devin_session, devin_sessions, opencode_session, opencode_sessions,
                              omp_root, omp_session, parse_rollout_name, resolve_codex_thread,
                              session_facts, validate_session_id)
@@ -397,6 +398,11 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
         except (OSError, sqlite3.Error, ValueError) as error:
             stats["errors"].append(f"Devin session discovery failed: {error}")
             print(f"dont-forget: Devin session discovery failed: {error}", file=sys.stderr)
+        try:
+            candidates.extend(agy_sessions(cutoff, now - STALE))
+        except (OSError, sqlite3.Error, ValueError) as error:
+            stats["errors"].append(f"Antigravity session discovery failed: {error}")
+            print(f"dont-forget: Antigravity session discovery failed: {error}", file=sys.stderr)
         for candidate in sorted(candidates, key=lambda item: item["mtime"], reverse=True):
             key = candidate["path"]
             stamp = (candidate["mtime"], candidate.get("size"))
@@ -406,6 +412,8 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
                     return session_facts(opencode_session(key.removeprefix("opencode://")))
                 if key.startswith("devin://"):
                     return session_facts(devin_session(key.removeprefix("devin://")))
+                if key.startswith("agy://"):
+                    return session_facts(agy_session(key))
                 if "thread" in candidate:
                     return session_facts(codex_session(Path(key)))
                 return session_facts(omp_session(Path(key)))
@@ -428,7 +436,7 @@ def scan(root: Path | None = None, days: int = DAYS, seconds: float | None = Non
                     stats["unclassified"] += 1
                     out.append({**entry, "path": key, "unclassified": True})
                     continue
-            elif entry.get("entrypoint") not in ("cli", "vscode"):
+            elif entry.get("entrypoint") not in ("cli", "vscode", "ide"):
                 continue
             out.append({**entry, "path": key})
     _save_cache_safe(files, stats)

@@ -24,25 +24,20 @@ also - `don't forget` is just simple. no daemons, no node - one folder, `.md` fi
 
 <h2 align="center">install</h2>
 
-```
-/plugin marketplace add szarkans/dont-forget
-/plugin install dont-forget@dont-forget
-```
-or
-```
-claude plugin marketplace add szarkans/dont-forget
-claude plugin install dont-forget@dont-forget
-```
+pick your agent — one command each:
 
-then
+| agent | install |
+|---|---|
+| Claude Code | `/plugin marketplace add szarkans/dont-forget` then `/plugin install dont-forget@dont-forget` (or `claude plugin marketplace add` + `claude plugin install` from a shell) |
+| Antigravity | `agy plugin install https://github.com/szarkans/dont-forget` |
+| Codex | `codex plugin marketplace add szarkans/dont-forget` then `codex plugin add dont-forget@dont-forget` |
+| OpenCode | `opencode plugin add github:szarkans/dont-forget` |
+| OMP | `omp plugin install github:szarkans/dont-forget` |
+| Devin | `devin plugins install szarkans/dont-forget` |
 
-```
-/dont-forget:setup
-```
+then run `/dont-forget:setup` (Claude Code) or `/dont-forget-setup` (everyone else), and use the agent as usual! After some time you'll have your second-brain-ish.
 
-then
-
-use Claude Code as usual! After some time you'll have your second-brain-ish.
+anything else: `npx skills add szarkans/dont-forget` copies the skills into whatever agent skills.sh supports — but that's skills only, no session-start digest and no bundled scripts. for a full manual install (or a checkout you hack on) use `python3 scripts/install-hosts.py --host all` — it detects installed CLIs, is transactional (`--dry-run`, `--uninstall`), and treats the checkout as the source of truth, so don't delete the folder after.
 
 requirements: `python3`. No pip installs, no dependencies — standard library only.
 

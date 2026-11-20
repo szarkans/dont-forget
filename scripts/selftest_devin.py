@@ -60,6 +60,11 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
         "INSERT INTO sessions (id, working_directory, backend_type, model, agent_mode,"
         " created_at, last_activity_at, main_chain_id, hidden) VALUES (?,?,?,?,?,?,?,?,?)",
         ("sub-agent", str(workdir), "cli", "swe", "code", now - 3600, now - 3500, 2, 1))
+    connection.execute(
+        "INSERT INTO sessions (id, working_directory, backend_type, model, agent_mode,"
+        " created_at, last_activity_at, main_chain_id, hidden) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("compacted-session", str(workdir), "cli", "swe", "code", now - 3500, now - 3400,
+         15, 0))
     rows = [
         (1, None, {"role": "system", "content": "PRIVATE SYSTEM PROMPT"}),
         (2, 1, {"role": "user", "content": "DEVIN question one",
@@ -98,6 +103,35 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
             " chat_message, created_at) VALUES (?,?,?,?,?)",
             ("sub-agent", node_id, node_id - 1 or None, user_text(f"sub {node_id}"),
              now - 40 + node_id))
+    # Compaction re-roots the chain: the post-compaction stretch hangs off a fresh
+    # parentless system prefix, its summary node pointing back at the old tail in
+    # metadata.summarized_from, and the early context replayed under
+    # extensions."compact/prior_node_ids".
+    compacted = [
+        (1, None, {"role": "system", "content": "prefix one"}, None),
+        (2, 1, {"role": "user", "content": "EARLY question",
+                "metadata": {"is_user_input": True}}, None),
+        (3, 2, {"role": "assistant", "content": "EARLY answer"}, None),
+        (10, None, {"role": "system", "content": "prefix two"}, None),
+        (11, 10, {"role": "system", "content": "machinery"}, None),
+        (12, 11, {"role": "user", "content": "EARLY question"},
+         {"extensions": {"compact/prior_node_ids": [2]}}),
+        (13, 12, {"role": "system",
+                  "content": "You are continuing work from a previous "
+                             "conversation thread. Below is a summary: EARLY "
+                             "things happened"},
+         {"summarized_from": 3}),
+        (14, 13, {"role": "user", "content": "LATE question",
+                  "metadata": {"is_user_input": True}}, None),
+        (15, 14, {"role": "assistant", "content": "LATE answer"}, None),
+    ]
+    for node_id, parent, message, metadata in compacted:
+        connection.execute(
+            "INSERT INTO message_nodes (session_id, node_id, parent_node_id,"
+            " chat_message, created_at, metadata) VALUES (?,?,?,?,?,?)",
+            ("compacted-session", node_id, parent, json.dumps(message),
+             now - 30 + node_id,
+             json.dumps(metadata) if metadata else None))
     connection.commit()
     connection.close()
     os.environ["CHISEL_SESSION_DB"] = str(db)
@@ -128,6 +162,18 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
                (HOME_DIR / "closing-sessions.jsonl").read_text().splitlines()]
     assert pending[-1]["session_id"] == "devin:main-session", pending
 
+    # A compacted session is followed through the summarized_from links: both
+    # stretches arrive, the summary becomes a compaction turn the split can cut
+    # at, and the replayed context does not come back as duplicate turns.
+    compact = devin_session("compacted-session")
+    roles = [turn["role"] for turn in compact["turns"]]
+    texts = [turn["text"] for turn in compact["turns"]]
+    assert roles.count("compaction") == 1, roles
+    assert any("EARLY things happened" in t for t in texts), texts
+    assert any("EARLY answer" in t for t in texts), texts
+    assert any("LATE answer" in t for t in texts), texts
+    assert sum("EARLY question" in t for t in texts) == 1, texts
+
     # The hook's session map is what a later reader trusts for identity.
     record_session_map("devin", "main-session", str(workdir.resolve()))
     auto = invoke("--harness", "devin", env=env, cwd=workdir)
@@ -141,10 +187,14 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
     export = {"schema_version": "atif-v1", "session_id": "ended-session",
               "agent": {"cwd": "/work"},
               "steps": [
-                  {"step_id": 1, "source": "user", "message": "ATIF hello"},
-                  {"step_id": 2, "source": "agent", "message": "ATIF reply",
+                  {"step_id": 1, "source": "system",
+                   "message": "You are continuing work from a previous "
+                              "conversation thread. Below is a summary: ATIF "
+                              "things happened"},
+                  {"step_id": 2, "source": "user", "message": "ATIF hello"},
+                  {"step_id": 3, "source": "agent", "message": "ATIF reply",
                    "tool_calls": [{"function": {"name": "read", "arguments": "{}"}}]},
-                  {"step_id": 3, "source": "system", "message": "PRIVATE"}]}
+                  {"step_id": 4, "source": "system", "message": "PRIVATE"}]}
     atif = transcripts_dir / "ended-session.json"
     atif.write_text(json.dumps(export))
     via_path = invoke("--path", atif, env=env)
@@ -154,6 +204,12 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-devin-") as directory:
     via_id = invoke("--harness", "devin", "--session", "ended-session", env=env)
     assert via_id.returncode == 0 and "ATIF hello" in Path(
         json.loads(via_id.stdout)["snapshot_file"]).read_text(), via_id.stderr
+    # The injected summary is kept as a compaction turn, not dropped with the rest
+    # of the system machinery.
+    atif_turns = {turn["role"] for turn in
+                  json.loads(Path(json.loads(via_id.stdout)["snapshot_file"])
+                             .read_text())["turns"]}
+    assert "compaction" in atif_turns, atif_turns
 
     # Unknown and malformed sessions fail loudly and record nothing.
     before = (HOME_DIR / "closing-sessions.jsonl").read_text()

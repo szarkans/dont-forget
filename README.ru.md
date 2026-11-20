@@ -26,23 +26,27 @@ claude-mem — быстрая память (как оперативка), аге
 
 ## Установка
 
-```
-/plugin marketplace add szarkans/dont-forget
-/plugin install dont-forget@dont-forget
+выбери своего агента — по одной команде на каждого:
 
-or
-claude plugin marketplace add szarkans/dont-forget
-claude plugin install dont-forget@dont-forget
-```
+| агент | установка |
+|---|---|
+| Claude Code | `/plugin marketplace add szarkans/dont-forget` затем `/plugin install dont-forget@dont-forget` (или `claude plugin marketplace add` + `claude plugin install` из шелла) |
+| Antigravity | `agy plugin install https://github.com/szarkans/dont-forget` |
+| Codex | `codex plugin marketplace add szarkans/dont-forget` затем `codex plugin add dont-forget@dont-forget` |
+| OpenCode | `opencode plugin add github:szarkans/dont-forget` |
+| OMP | `omp plugin install github:szarkans/dont-forget` |
+| Devin | `devin plugins install szarkans/dont-forget` |
 
-потом
-
-`/dont-forget:setup`
-
-потом
-
-Дальше просто пользуйся Claude Code как обычно. Через какое-то время у тебя появится
+потом запусти `/dont-forget:setup` (Claude Code) или `/dont-forget-setup` (все остальные),
+и просто пользуйся агентом как обычно. Через какое-то время у тебя появится
 что-то вроде второго мозга.
+
+остальные агенты: `npx skills add szarkans/dont-forget` скопирует скиллы в любой
+агент, который умеет skills.sh — но это только скиллы: без дайджеста на старте
+сессии и без скриптов. Для полноценной ручной установки (или для чекаута, в
+котором ковыряешься) — `python3 scripts/install-hosts.py --host all`: скрипт сам
+находит установленные CLI, работает транзакционно (`--dry-run`, `--uninstall`) и
+считает чекаут источником правды, так что папку после установки не удаляй.
 
 Нужен только `python3`. Никаких pip-установок и зависимостей — одна стандартная
 библиотека.

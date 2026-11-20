@@ -4,6 +4,8 @@ description: Close a work session — audit what was not saved, then record the 
 model: inherit
 ---
 
+`<skill-root>` is the directory containing this `SKILL.md`; its `scripts/` entry is the script tree referenced below. If that entry is absent (some plugin installers drop symlinks), the script tree is `../../scripts` from this file, at the plugin root.
+
 # Close a session
 
 Two things happen here, in this order: an audit of what the session leaves unsaved, and —
@@ -18,7 +20,7 @@ not show, and never invent a candidate the conversation does not support.
 You lived through this session, so you are its worst auditor: your context is full, and
 whatever became routine along the way is now invisible to you.
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/transcript.py"`. It resolves this session
+Run `python3 "<skill-root>/scripts/transcript.py"`. It resolves this session
 on whichever harness hosts it — Claude, Codex, OpenCode, OMP or Devin — freezes the
 conversation into a snapshot file, and prints that file plus how many pieces it splits
 into. Auditing a different session needs its coordinates instead:
@@ -38,7 +40,7 @@ why it was split rather than duplicated. If no transcript is found, audit it you
 say plainly that this is the weaker check.
 
 A session that ended before the skill ran shows up in the startup digest and in
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/unclosed.py" --list`. Audit it the same way: take
+`python3 "<skill-root>/scripts/unclosed.py" --list`. Audit it the same way: take
 its path or URI from there and run `transcript.py --path <it>` — that only marks it as
 closing; it is recorded as closed when the session note is written.
 
@@ -76,7 +78,7 @@ two readers of two pieces see different things, which is why it was split.
 Then log the whole table — accepted and rejected alike — so a wrongly judged `nowhere`
 leaves a trail instead of dying silently: pipe the rows as JSON
 (`[{"candidate": ..., "destination": ..., "kind": ...}]`) to
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/audit-log.py" --session <audit_session_id>`.
+`python3 "<skill-root>/scripts/audit-log.py" --session <audit_session_id>`.
 Logging is separate from writing: the journal records the proposal even when the user
 says no to every write.
 
@@ -101,7 +103,7 @@ Never run or simulate tests to fill a gap. Say which checks actually ran.
 2. Save accepted knowledge through `that`, one candidate at a time.
 3. Log every refusal: pipe `{"verdict": "rejected", "query": "<the candidate>", "notes":
    [], "note": "<why they said no>"}` to
-   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/feedback-log.py"`. Each "no" is data; in a month
+   `python3 "<skill-root>/scripts/feedback-log.py"`. Each "no" is data; in a month
    it says what actually gets rejected, and the filter can be built on that instead of a
    guess.
 4. Close the threads that are finished (below).
@@ -116,7 +118,7 @@ Never run or simulate tests to fill a gap. Say which checks actually ran.
 
 A digest offering work finished three weeks ago teaches the user to stop reading it. Pass
 the threads it still shows to
-`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/threads.py" --check "<thread as the digest shows
+`python3 "<skill-root>/scripts/threads.py" --check "<thread as the digest shows
 it>"`, and read what comes back as evidence about **the thing named**, not a verdict on
 the thread: "backport the merged PR #41" mentions something merged and is not itself done.
 
@@ -140,7 +142,7 @@ Threads live only in this note's pending section; the digest reads them from the
   the end of a context is the end of a session, and this note is the only handoff.
 - [ ] `## Links`: a MOC if a fitting one exists (find it with `search.py`), otherwise the
   notes this session actually touched. Do not invent a hub to fill the slot.
-- [ ] Write only through `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/vault-write.py"` with
+- [ ] Write only through `python3 "<skill-root>/scripts/vault-write.py"` with
   `filename` and `content`. If the name exists, offer `action: "replace"` with
   `expected_sha`; on `conflict`, stop and tell the user.
 - [ ] A note with no `[[link]]` comes back `rejected` — the writer holds the graph's

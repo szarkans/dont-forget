@@ -1,0 +1,15 @@
+{
+  "name": "dont-forget",
+  "version": "0.20.0",
+  "description": "Persistent Zettelkasten memory for AI agents over a plain Markdown vault",
+  "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/szarkans/dont-forget",
+  "repository": "https://github.com/szarkans/dont-forget",
+  "exports": {
+    ".": "./integrations/opencode.mjs"
+  },
+  "omp": {
+    "extensions": ["./integrations/omp.mjs"]
+  }
+}

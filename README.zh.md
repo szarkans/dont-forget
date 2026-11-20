@@ -24,22 +24,26 @@ claude-mem 是快记忆（像内存），智能体一直看得见。dont-forget 
 
 ## 安装
 
-```
-/plugin marketplace add szarkans/dont-forget
-/plugin install dont-forget@dont-forget
+选你用的 agent，一个 agent 一条命令：
 
-or
-claude plugin marketplace add szarkans/dont-forget
-claude plugin install dont-forget@dont-forget
-```
+| agent | 安装命令 |
+|---|---|
+| Claude Code | `/plugin marketplace add szarkans/dont-forget` 然后 `/plugin install dont-forget@dont-forget`（或在终端里 `claude plugin marketplace add` + `claude plugin install`） |
+| Antigravity | `agy plugin install https://github.com/szarkans/dont-forget` |
+| Codex | `codex plugin marketplace add szarkans/dont-forget` 然后 `codex plugin add dont-forget@dont-forget` |
+| OpenCode | `opencode plugin add github:szarkans/dont-forget` |
+| OMP | `omp plugin install github:szarkans/dont-forget` |
+| Devin | `devin plugins install szarkans/dont-forget` |
 
-然后
+然后运行 `/dont-forget:setup`（Claude Code）或 `/dont-forget-setup`（其他 agent），
+接下来照常用 agent 就行。用一阵子之后，你就有了个类似第二大脑的东西。
 
-`/dont-forget:setup`
-
-然后
-
-接下来照常用 Claude Code 就行。用一阵子之后，你就有了个类似第二大脑的东西。
+其他 agent：`npx skills add szarkans/dont-forget` 会把 skills 复制到任何
+skills.sh 支持的 agent —— 但只有 skills，没有会话启动时的摘要注入，也不带脚本。
+想要完整的手动安装（或者改本地 checkout），用
+`python3 scripts/install-hosts.py --host all`：它会自动探测已安装的 CLI，
+支持事务式安装（`--dry-run`、`--uninstall`），并把 checkout 当作事实来源 ——
+装完别删这个目录。
 
 依赖：只要 `python3`。不用 pip 装任何东西 —— 只用标准库。
 

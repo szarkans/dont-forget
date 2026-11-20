@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.20.0 — 2026-11-20
+
+### Added
+- Antigravity support end to end: `transcript.py --harness agy` reads
+  `~/.gemini/antigravity-cli/brain/<id>/.../transcript_full.jsonl`,
+  `unclosed.py` lists agy sessions from `conversation_summaries.db`, and the
+  session-start hook emits Antigravity's `injectSteps` contract.
+- Native plugin installs on every host: `.antigravity-plugin/` +
+  root `hooks.json` (`agy plugin install`), `.codex-plugin/` +
+  `.agents/plugins/marketplace.json` (`codex plugin marketplace add` +
+  `codex plugin add`), a root `package.json` serving both
+  `opencode plugin add` and `omp plugin install`, and the existing
+  Claude marketplace and `devin plugins install` paths. One README table
+  (en/ru/zh) lists a single install command per agent.
+  - Why: installation used to mean cloning the repo and running a maintainer
+    script; every host we support already ships a plugin manager.
+- `install-hosts.py --host agy`: developer/fallback install that symlinks the
+  skills into `~/.gemini/config/skills` and merges one named `dont-forget`
+  hook group into `~/.gemini/config/hooks.json`.
+
+### Changed
+- Skills no longer reference `${CLAUDE_PLUGIN_ROOT}`: script paths resolve
+  from `<skill-root>`, and each `skills/<name>/scripts` symlink makes the
+  script tree reachable from inside the skill directory in any plugin
+  container.
+- Devin compaction handling (parallel fix, now included): `devin_session`
+  follows `metadata.summarized_from` links, emits the summary as a
+  `compaction` turn the audit split can cut at, and dedupes replayed context.
+
+### Notes
+- `npx skills add szarkans/dont-forget` remains a skills-only fallback:
+  skills.sh copies skill folders, but the shared script core and hooks live
+  outside them, so the digest and script-backed commands are not installed.
+- Devin's plugin format reads only the root `hooks.json`, which now carries
+  Antigravity's format; `devin plugins install` therefore installs skills
+  only. The Devin session-start digest still comes from
+  `install-hosts.py --host devin`, as before.
+
 ## 0.19.0 — 2026-11-17
 
 ### Added

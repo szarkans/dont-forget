@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"${DONT_FORGET_HOOKS:-1}\" = 0 ] || python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/hot-scan.py\" --hook --harness codex --budget 12288",
+            "timeout": 15,
+            "additionalContextLimit": 0
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ \"${DONT_FORGET_HOOKS:-1}\" = 0 ] || python3 \"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/hot-scan.py\" --hook --harness codex --budget 12288",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

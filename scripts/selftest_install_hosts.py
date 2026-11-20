@@ -61,6 +61,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-install-") as directory:
     for path in (shared / "references").glob("*.md"):
         text = path.read_text()
         assert "${CLAUDE_PLUGIN_ROOT}" not in text, path
+        assert "<skill-root>" not in text, path
 
     # One command skill per catalog entry, next to the shared skill.
     catalog = json.loads((ROOT / "integrations/commands.json").read_text())
@@ -69,6 +70,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-install-") as directory:
         text = skill.read_text()
         assert f'name: {entry["command"]}' in text.split("---")[1], skill
         assert "${CLAUDE_PLUGIN_ROOT}" not in text, skill
+        assert "<skill-root>" not in text, skill
     assert "disable-model-invocation" in \
         (home / ".agents/skills/dont-forget-him-please/SKILL.md").read_text()
 
@@ -154,7 +156,7 @@ with tempfile.TemporaryDirectory(prefix="dont-forget-install-") as directory:
     all_home = home / "all"
     result = load(run(all_home, "--host", "all", path="/nonexistent"))
     assert result["hosts"] == ["shared"], result
-    assert set(result["skipped"]) == {"codex", "opencode", "omp", "devin"}, result
+    assert set(result["skipped"]) == {"codex", "opencode", "omp", "devin", "agy"}, result
     assert (all_home / ".dont-forget/hosts.json").is_file()
 
     # OpenCode also gets a file command per catalog entry.

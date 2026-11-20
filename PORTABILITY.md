@@ -1,8 +1,22 @@
 # Host integrations
 
 The Markdown vault, SQLite index, search, writer and audit are shared Python tools.
-Claude Code loads the plugin; Codex, OpenCode and OMP get a generated shared skill and a
-thin native adapter. Memory and its index are shared, not copied per host.
+Claude Code loads the plugin; Codex, OpenCode, OMP, Devin and Antigravity get a generated
+shared skill and a thin native adapter. Memory and its index are shared, not copied per host.
+
+## Install
+
+Every supported host has a native plugin path — see the README table for the user-facing
+commands. The repository ships a manifest per host: `.claude-plugin/` +
+`.claude-plugin/marketplace.json`, `.codex-plugin/` + `.agents/plugins/marketplace.json`,
+`.antigravity-plugin/` + the root `hooks.json` (Antigravity's named-group format), and the
+root `package.json` that serves both OpenCode's plugin loader and OMP's `omp.extensions`.
+Devin reads the plugin formats above without a manifest of its own; its root `hooks.json`
+slot is taken by Antigravity's format, so a Devin plugin install carries skills only and
+the Devin digest still comes from `install-hosts.py --host devin`.
+
+`npx skills add szarkans/dont-forget` copies skill folders only — no shared `scripts/`
+core, no hooks — and is documented as a fallback, not an install.
 
 ## Install locally
 
@@ -12,11 +26,12 @@ Run from this checkout:
 python3 scripts/install-hosts.py --host all
 ```
 
-`--host shared`, `--host codex`, `--host opencode`, `--host omp` install a subset; a single
-host install also ensures the shared skill. `--host all` installs shared plus the CLIs it
-finds on `PATH`, and lists the rest as `skipped`. An explicit host installs without a CLI,
-except OpenCode, which needs `--opencode-api 1|2` when no CLI is available. An unknown
-detected OpenCode major version exits 2 before writing.
+`--host shared`, `--host codex`, `--host opencode`, `--host omp`, `--host devin`,
+`--host agy` install a subset; a single host install also ensures the shared skill.
+`--host all` installs shared plus the CLIs it finds on `PATH`, and lists the rest as
+`skipped`. An explicit host installs without a CLI, except OpenCode, which needs
+`--opencode-api 1|2` when no CLI is available. An unknown detected OpenCode major version
+exits 2 before writing.
 
 Real changes are transactions. Before bytes go under
 `DONT_FORGET_HOME/host-backups/<id>/`; a manifest records each operation and its progress.
@@ -73,6 +88,8 @@ pointed at the installed shared skill.
 python3 scripts/transcript.py --harness codex --session THREAD_ID
 python3 scripts/transcript.py --harness opencode --session SESSION_ID
 python3 scripts/transcript.py --harness omp --session SESSION_ID [--leaf LEAF]
+python3 scripts/transcript.py --harness devin --session SESSION_ID
+python3 scripts/transcript.py --harness agy --session CONVERSATION_ID
 python3 scripts/transcript.py --path /absolute/transcript.jsonl
 python3 scripts/transcript.py --path opencode://SESSION_ID --piece 1
 python3 scripts/transcript.py --snapshot FILE --piece N
@@ -114,7 +131,10 @@ used, so a page opened outside Claude behaves the same way.
 ## Digest and hooks
 
 Claude and Codex use native `SessionStart` hooks; Codex also gets a `PreCompact` notification
-that saves nothing. OpenCode and OMP inject memory through their event hooks. OMP's
+that saves nothing. OpenCode and OMP inject memory through their event hooks. Antigravity
+hooks emit `injectSteps` instead of `additionalContext` and learn the conversation id from
+stdin's `conversationId`; the local install writes one named `dont-forget` group into
+`~/.gemini/config/hooks.json`. OMP's
 `/dont-forget-digest` shows the fresh digest on demand; headless access is:
 
 ```bash
@@ -147,6 +167,9 @@ Smoke-testing a `dont-forget-<name>` command differs per host:
   reachable in `run` as a skill.
 - Devin and other `.agents/skills` readers: `/dont-forget-<name>` or `$dont-forget-<name>`
   per the host's own skill syntax.
+- Antigravity: `agy -p "<prompt>"` runs a headless session — plugin skills resolve as
+  `/<skill-name>` and hook context lands in the request. Command tools need
+  `--dangerously-skip-permissions` headless, or a permissions allow-rule.
 
 Integration references checked 2026-11-03:
 [Claude hooks](https://code.claude.com/docs/en/hooks.md),
@@ -154,4 +177,7 @@ Integration references checked 2026-11-03:
 [Codex skills](https://learn.chatgpt.com/docs/build-skills.md),
 [OpenCode skills](https://opencode.ai/docs/skills/),
 [OpenCode plugin hooks](https://github.com/anomalyco/opencode/blob/dev/services/www/src/docs/content/build/plugins/server.mdx),
-[OMP extensions](https://omp.sh/docs/extension-authoring).
+[OMP extensions](https://omp.sh/docs/extension-authoring),
+[Antigravity skills](https://antigravity.google/docs/skills/),
+[Antigravity hooks](https://antigravity.google/docs/hooks),
+[Antigravity plugins](https://antigravity.google/docs/plugins).

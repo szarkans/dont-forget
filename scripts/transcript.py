@@ -35,11 +35,12 @@ import time
 from pathlib import Path
 
 from common import HOME_DIR
-from session_sources import (active_session_identity, claude_projects, codex_session,
-                             devin_export, devin_session, devin_state_db, image_line,
-                             json_lines, omp_active, omp_session, omp_transcript_path,
-                             opencode_db, opencode_export, opencode_session,
-                             resolve_codex_thread, validate_session_id)
+from session_sources import (active_session_identity, agy_session, claude_projects,
+                             codex_session, devin_export, devin_session, devin_state_db,
+                             image_line, json_lines, omp_active, omp_session,
+                             omp_transcript_path, opencode_db, opencode_export,
+                             opencode_session, resolve_codex_thread,
+                             validate_session_id)
 from unclosed import record_pending
 
 PROJECTS = Path.home() / ".claude" / "projects"
@@ -149,6 +150,8 @@ def load_session(source) -> dict:
         return opencode_session(text[len("opencode://"):])
     if text.startswith("devin://"):
         return devin_session(text)
+    if text.startswith("agy://"):
+        return agy_session(text)
     path = Path(text)
     if path.suffix == ".json":
         try:
@@ -205,6 +208,8 @@ def resolve_session(harness: str, session_id: str, leaf: str | None = None) -> d
         return omp_session(omp_transcript_path(session_id), leaf_id=leaf)
     if harness == "devin":
         return devin_session(session_id)
+    if harness == "agy":
+        return agy_session(session_id)
     raise ValueError(f"unknown harness: {harness}")
 
 
@@ -349,7 +354,7 @@ def freeze_snapshot(session: dict, audit_id: str) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--path", help="a transcript file, or an opencode:// / devin:// URI")
-    parser.add_argument("--harness", choices=("claude", "codex", "opencode", "omp", "devin"),
+    parser.add_argument("--harness", choices=("claude", "codex", "opencode", "omp", "devin", "agy"),
                         help="which host's store holds the session; needs --session")
     parser.add_argument("--session", help="the session id inside that host's store")
     parser.add_argument("--leaf", default=None,
